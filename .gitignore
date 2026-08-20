@@ -1,0 +1,33 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Raw cache — byte-identical copies of upstream files, re-fetchable, never edited.
+# Not committed: large, and the whole point is that it mirrors an external source.
+data/raw/
+
+# Backtest predictions are regenerable from code + raw cache (ADR 0005).
+# outputs/live/ is deliberately NOT ignored — it is sealed evidence and must be committed.
+outputs/backtest/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+
+# Conda / venv
+.conda/
+env/
+venv/
+.venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
