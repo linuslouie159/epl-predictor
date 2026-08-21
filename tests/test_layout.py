@@ -23,6 +23,15 @@ MODULES = (
     "epl.ledger",
 )
 
+#: Single-file modules that every stage imports rather than a stage of their own: two scope which
+#: data a Prediction may see, one owns the on-disk layout. Ticket 5 puts Prediction Rounds here,
+#: beside the Windows.
+FOUNDATIONS = ("epl.windows", "epl.rounds", "epl.paths")
+
+#: The modules that are still documented shells. Each is removed from here as its stage is built:
+#: ingest and clubs by tickets 2-4, metrics by ticket 6.
+UNBUILT = MODULES[3:]
+
 
 @pytest.mark.parametrize("name", MODULES)
 def test_each_module_imports(name: str) -> None:
@@ -52,7 +61,7 @@ def test_each_module_says_what_it_is_for(name: str) -> None:
     assert summary.endswith("."), f"{name}: docstring should open with a full sentence"
 
 
-@pytest.mark.parametrize("name", MODULES[2:])
+@pytest.mark.parametrize("name", UNBUILT)
 def test_each_unbuilt_module_records_what_it_will_hold(name: str) -> None:
     """The shells exist to satisfy the layout, so they must be worth more than an empty file.
 
@@ -68,3 +77,12 @@ def test_the_top_level_package_imports() -> None:
     import epl
 
     assert epl.__version__
+
+
+@pytest.mark.parametrize("name", FOUNDATIONS)
+def test_each_foundation_module_imports_and_says_what_it_is_for(name: str) -> None:
+    """Ticket 5 puts Prediction Rounds beside the Windows: both scope which data a Prediction may
+    see, both are imported by every later stage, and neither belongs inside one of them."""
+    module = importlib.import_module(name)
+    assert module.__doc__ is not None
+    assert module.__doc__.strip().splitlines()[0].endswith(".")

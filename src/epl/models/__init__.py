@@ -11,7 +11,7 @@ Three decisions constrain what goes here:
 * **An ordered logit turns one rating difference into three probabilities** (ADR 0006). The draw
   band has fixed width, so its share narrows automatically as Supremacy grows — matching the
   measured fall from 32.3% to 13.4% — with no hand-coded taper.
-* **Dixon-Coles is fitted two ways from one likelihood** (ADR 0007): maximum likelihood at all 1,332
+* **Dixon-Coles is fitted two ways from one likelihood** (ADR 0007): maximum likelihood at all 1,189
   Prediction Rounds, a full posterior only where a Season Projection is produced. The split is
   deliberate and must not be "simplified" away.
 

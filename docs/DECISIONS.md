@@ -21,7 +21,7 @@ an ADR in [adr/](./adr/); the rest are recorded only here.
 | 12 | v1 = stages 1–8. Deferred with written stubs: XGBoost/ML, Golden Boot, API-Football | — |
 | 13 | 2026/27 gameweek 1 (21 Aug 2026) deliberately not chased; backtest power matters more than 10 live matches | — |
 | 14 | Season Projections use a Bayesian posterior. Within-season strength drift is **not** modelled — measured at zero | [0007](./adr/0007-mle-for-matches-bayesian-for-projections.md) |
-| 15 | Dixon-Coles: MLE at all 1,332 Prediction Rounds, Bayesian only where a Season Projection is produced | [0007](./adr/0007-mle-for-matches-bayesian-for-projections.md) |
+| 15 | Dixon-Coles: MLE at all 1,189 Prediction Rounds, Bayesian only where a Season Projection is produced | [0007](./adr/0007-mle-for-matches-bayesian-for-projections.md) |
 | 16 | Miniforge + conda-forge; `environment.yml` is the source of truth; PyMC + nutpie | [0009](./adr/0009-conda-forge-toolchain.md) |
 | 17 | Burn-In Window 2000/01–2004/05 for warm-up and tuning, then frozen; scoring from 2005/06 | [0008](./adr/0008-burn-in-prefix-frozen-hyperparameters.md) |
 
@@ -61,6 +61,17 @@ Three corrections:
 - The lower tiers are 552 rows per Season **except 2019/20**, where COVID curtailed League One
   (400 rows) and League Two (440). The Premier League completed that Season.
 
+**Re-verified at stage 2 (21 Aug 2026)** against the 9,880 Premier League fixtures of 2000/01–2025/26.
+`tests/test_rounds.py` re-derives these on every run. One correction:
+
+- **Prediction Rounds are 1,189, not 1,332.** The design recorded 1,332 rounds, 51.2 per season and
+  7.42 fixtures per round; the anchor rule below yields **1,189 rounds, 45.7 per season and 8.31
+  fixtures per round**. The corpus is not in doubt — 2024/25 spans 109 distinct kickoff dates,
+  exactly as recorded. Every Tue/Fri anchoring variant was tried (on-or-before, strictly-before,
+  and every subset of anchor weekdays) and none reproduces 1,332, so the original figure could not
+  be sourced. The rule is stated as executable code in the spec and below, so the rule was kept and
+  the count corrected. Round sizes run from 1 to 20 fixtures; seasons hold between 41 and 52 rounds.
+
 ### Football-Data era boundaries (English tiers)
 
 | From | What appears |
@@ -87,7 +98,7 @@ Mean overround on the market-average pre-match line: **1.0562** (5.62% margin).
 
 ### Other measurements
 
-- **Prediction Rounds**: 1,332 across 2000/01–2025/26 (mean 51.2 per season, 7.42 fixtures per round).
+- **Prediction Rounds**: **1,189** across 2000/01–2025/26 (mean 45.7 per season, 8.31 fixtures per round). Corrected at stage 2 — the design recorded 1,332 / 51.2 / 7.42, which the anchor rule below does not produce over this corpus. See the note under *Measured facts*.
 - **Draw rate vs Supremacy**: 32.3% when evenly matched, falling monotonically to 13.4% at the widest mismatch. A 2.4x range.
 - **Promoted clubs** (75 club-seasons): mean 36.9 points vs a league average of 52.0; lose 51.5% of matches; 35 of 75 finished on 35 points or fewer. The penalty is unstable — 44.0 points for the 2010/11 intake, 19.7 for 2024/25.
 - **Within-season drift** (520 club-seasons): first-half vs second-half PPG correlation 0.686; observed SD of the difference 0.390 against 0.400 expected from sampling noise alone. Implied true drift: **zero**.
@@ -131,6 +142,22 @@ anchor(kickoff_date):
 
 Matches Football-Data's stated collection convention: pre-match odds sampled Friday afternoon for
 weekend fixtures, Tuesday afternoon for midweek ones.
+
+The **As-Of Instant** is midnight at the start of that anchor day, not the afternoon. No football is
+played between the two, so the information sets are identical for every input this project holds,
+and the earlier instant can only ever withhold data, never admit it. It is also the only choice that
+is checkable: kickoff times are absent before 2019/20, and the earliest kickoff recorded on any
+Tuesday or Friday is 12:30.
+
+Football-Data records no kickoff time before 2019/20, so only 2,660 of the 9,880 Premier League
+fixtures carry one. That does not weaken the guarantee for most of the rest: a fixture kicking off
+on a *later* day than its anchor is strictly after the instant whatever time it started.
+
+The gap is the **437 fixtures — 4.4%, all Tue/Fri kickoffs between 2000/01 and 2018/19** — that kick
+off on their own anchor day with no recorded time. For those, the assertion is that the As-Of Instant
+lands at or before the start of the kickoff day, which, since no fixture in the corpus kicks off at
+midnight, still gives strictness. `tests/test_rounds.py` pins that count at exactly 437 so the
+carve-out cannot quietly grow, and asserts the strict form over the other 9,443.
 
 ## Open risks
 

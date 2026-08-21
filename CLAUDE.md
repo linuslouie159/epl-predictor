@@ -41,13 +41,28 @@ Do not "fix" these without reading the linked ADR first:
 
 ## Status
 
-Design is complete and grilled. **Stage 1 is built**: the Miniforge environment
-(`environment.yml`), the Football-Data ingester (`src/epl/ingest/`) and the Club/Alias table
-(`src/epl/clubs/`, 115 Clubs across four tiers), with 206 tests. The remaining six modules from
-the README layout exist as documented shells, each naming the issue that builds it.
+Design is complete and grilled.
 
-Stage 2 is next: the metrics module — RPS, Brier, log loss, accuracy, calibration — unit-tested
-against hand-worked examples before any model uses it.
+**Stage 1 is built**: the Miniforge environment (`environment.yml`), the Football-Data ingester
+(`src/epl/ingest/`) and the Club/Alias table (`src/epl/clubs/`, 115 Clubs across four tiers).
+
+**Stage 2 is built**: Prediction Rounds (`src/epl/rounds.py`, issue #5) and the metrics module
+(`src/epl/metrics/`, issue #6) — RPS, Brier, log loss, accuracy and the 10-bin reliability diagram,
+every expected value worked by hand before any model uses it.
+
+The remaining five modules from the README layout exist as documented shells, each naming the issue
+that builds it. Stage 3 is next: pyramid-wide Elo through an ordered logit (issue #9).
+
+Two things about stage 2 worth knowing before building on it:
+
+- **A Prediction Round's As-Of Instant is midnight at the start of its anchor day**, not the
+  afternoon the market samples at. Nothing is played in between, so midnight withholds no data the
+  market had — and it is the only choice checkable for the 437 Fixtures that kick off on their own
+  anchor day with no recorded kickoff time. Football-Data records no kickoff time at all before
+  2019/20 (7,220 of 9,880 Premier League Fixtures).
+- **There are 1,189 Prediction Rounds, not the 1,332 the design recorded.** The anchor rule is
+  stated as executable code and was kept; the unreproducible count was corrected. See
+  [docs/DECISIONS.md](./docs/DECISIONS.md).
 
 ```
 conda env create -f environment.yml

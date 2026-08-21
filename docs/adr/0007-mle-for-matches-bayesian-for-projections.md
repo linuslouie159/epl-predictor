@@ -1,7 +1,7 @@
 # Fit Dixon-Coles by maximum likelihood for matches, and Bayesian only for Season Projections
 
 Fitting one model two ways invites a future reader to "simplify" it, so the split needs justifying.
-Walk-forward prediction requires a refit at every Prediction Round: 1,332 of them across 2000/01–
+Walk-forward prediction requires a refit at every Prediction Round: 1,189 of them across 2000/01–
 2025/26. Full Bayesian sampling at each would make a single backtest an overnight-to-two-day job,
 which is fatal during development when the backtest reruns after every change.
 
@@ -11,7 +11,7 @@ MLE agree closely. But that same uncertainty compounds across 380 simulated Fixt
 table, and ignoring it is what makes naive season simulators report a title probability of 48% where
 the honest answer is 34%. So the expensive tool goes where it does real work.
 
-Maximum likelihood therefore serves all 1,332 rounds; a full posterior is fitted only where a Season
+Maximum likelihood therefore serves all 1,189 rounds; a full posterior is fitted only where a Season
 Projection is produced — weekly during the live season, and at roughly six checkpoints per historical
 Season for validation.
 

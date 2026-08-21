@@ -49,7 +49,8 @@ market-average pre-match (`BbAv*`) from 2005/06 spliced to `Avg*` from 2019/20, 
 ## Build order
 
 1. **Ingest** — Football-Data `E0`–`E3` + `fixtures.csv`; Club/Alias resolution
-2. **Metrics** — RPS, Brier, log loss, accuracy, calibration. Unit-tested against hand-worked examples
+2. **Metrics** — RPS, Brier, log loss, accuracy, calibration. Unit-tested against hand-worked examples.
+   Prediction Rounds are derived here too, since every later stage is scoped by them
 3. **Elo** — pyramid-wide ratings → ordered logit → shared calibration layer
 4. **Benchmarks** — Market Line (vig removed) and Naive Baseline
 5. **Pundits** — backfill, grading, Calibrated Pundit, three-way scoreboard
@@ -72,6 +73,8 @@ stub explaining what it would do and what it needs. API-Football is unnecessary 
 ```
 data/raw/            cached downloads, byte-identical, never edited
 data/processed/      cleaned tables
+src/epl/windows.py   Season identity, Burn-In and Evaluation Windows
+src/epl/rounds.py    the As-Of Instant rule and Prediction Rounds
 src/epl/ingest/      football-data, pundit scrapers
 src/epl/clubs/       canonical Club table + Alias resolution
 src/epl/metrics/     RPS, Brier, log loss, calibration
@@ -130,6 +133,39 @@ with no network access and without patching anything:
 from epl.ingest import fetch_season, mapping_fetcher, directory_fetcher
 fetch_season(2025, "E0", fetcher=directory_fetcher("tests/data"))
 ```
+
+## Prediction Rounds
+
+A Fixture's As-Of Instant is midnight at the start of the most recent Tuesday or Friday before its
+kickoff, and Fixtures sharing one form a Prediction Round. Over 2000/01–2025/26 that is **1,189
+rounds**, 45.7 per Season, 8.31 Fixtures each.
+
+```python
+from epl.ingest import load_matches
+from epl.rounds import assign_rounds, prediction_rounds
+
+matches = load_matches(divisions=("E0",))
+assign_rounds(matches)      # every Fixture gains as_of_instant + prediction_round
+prediction_rounds(matches)  # one row per round, with the first kickoff it must be sealed before
+```
+
+`assign_rounds` raises rather than returning a frame in which any Fixture kicks off at or before
+the instant it is predicted from. The design recorded 1,332 rounds; the anchor rule it states as
+code produces 1,189, and [docs/DECISIONS.md](./docs/DECISIONS.md) records why the rule was kept and
+the count corrected.
+
+## Scoring
+
+```python
+from epl import metrics
+
+metrics.rps([0.5, 0.3, 0.2], "H")          # 0.145 — the primary metric
+metrics.score(predictions, outcomes)        # RPS, Brier, log loss, accuracy, in one Scorecard
+metrics.reliability(predictions, outcomes)  # the 10-bin reliability diagram
+```
+
+No function in `epl.metrics` takes a Predictor, and the package imports nothing that can produce a
+Prediction — asserted structurally, so the three-way scoreboard cannot become apples-to-oranges.
 
 ## Tests
 
