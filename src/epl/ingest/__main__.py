@@ -3,7 +3,7 @@
     python -m epl.ingest fetch                 fill the raw cache (skips what is already there)
     python -m epl.ingest fetch --refresh       re-download, including the growing current Season
     python -m epl.ingest fixtures              fetch the rolling forward-Fixture file
-    python -m epl.ingest build                 write data/processed/matches.csv from the cache
+    python -m epl.ingest build                 write matches.csv + odds_availability.csv
     python -m epl.ingest clubs                 report Club spellings the Alias table does not know
 """
 
@@ -23,6 +23,7 @@ from epl.ingest.football_data import (
     club_names_in_raw_cache,
     fetch_all,
     load_matches,
+    odds_availability,
 )
 from epl.paths import processed_dir
 
@@ -79,6 +80,16 @@ def main(argv: list[str] | None = None) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         matches.to_csv(out, index=False)
         print(f"{len(matches)} matches -> {out}")
+
+        # Recorded rather than inferred: once odds are a float column full of nulls, a Season with
+        # no market is indistinguishable from one the market priced at nothing.
+        availability = odds_availability(seasons, divisions)
+        record = out.parent / "odds_availability.csv"
+        availability.to_csv(record, index=False)
+        priced = int(availability["has_market_line"].sum()) if not availability.empty else 0
+        print(f"odds availability for {len(availability)} Season-tiers -> {record}")
+        print(f"  {priced} carry a Market Line, {len(availability) - priced} do not")
+
         _warn_if_not_canonical(seasons, divisions)
         return 0
 

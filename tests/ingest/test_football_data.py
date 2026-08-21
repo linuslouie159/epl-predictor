@@ -14,6 +14,7 @@ import pytest
 
 from epl.clubs import UnknownAliasError
 from epl.ingest import football_data as fd
+from epl.ingest.fetcher import mapping_fetcher
 from epl.ingest.football_data import IngestError
 
 
@@ -228,26 +229,24 @@ class TestParseGuards:
 
 
 class TestFetch:
-    def test_reuses_a_cached_file_without_a_request(self, project_root, monkeypatch) -> None:
+    def test_reuses_a_cached_file_without_a_request(self, project_root) -> None:
         path = fd.raw_season_path(2025, "E0")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"cached")
 
-        def explode(*args, **kwargs):  # pragma: no cover - the point is that it is not reached
-            raise AssertionError("a cached file must not be re-downloaded")
+        fetch = mapping_fetcher({})  # raises if asked for anything at all
+        assert fd.fetch_season(2025, "E0", fetcher=fetch).read_bytes() == b"cached"
+        assert fetch.requested == []
 
-        monkeypatch.setattr(fd.requests, "get", explode)
-        assert fd.fetch_season(2025, "E0").read_bytes() == b"cached"
-
-    def test_refresh_updates_the_cache(self, project_root, monkeypatch) -> None:
+    def test_refresh_updates_the_cache(self, project_root) -> None:
         """The current Season's upstream file grows weekly, so it must be re-fetchable."""
         path = fd.raw_season_path(2025, "E0")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"stale")
-        monkeypatch.setattr(fd.requests, "get", _fake_get(b"fresh"))
-        assert fd.fetch_season(2025, "E0", refresh=True).read_bytes() == b"fresh"
+        fetch = mapping_fetcher({fd.season_csv_url(2025, "E0"): b"fresh"})
+        assert fd.fetch_season(2025, "E0", refresh=True, fetcher=fetch).read_bytes() == b"fresh"
 
-    def test_refresh_keeps_the_bytes_it_replaces(self, project_root, monkeypatch) -> None:
+    def test_refresh_keeps_the_bytes_it_replaces(self, project_root) -> None:
         """Upstream backfills odds into rows already published (ADR 0005).
 
         Overwriting in place would destroy the only record of what the cache held when a Sealed
@@ -257,24 +256,22 @@ class TestFetch:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"as it stood at seal time")
 
-        monkeypatch.setattr(fd.requests, "get", _fake_get(b"backfilled a month later"))
-        fd.fetch_season(2025, "E0", refresh=True)
+        fetch = mapping_fetcher({fd.season_csv_url(2025, "E0"): b"backfilled a month later"})
+        fd.fetch_season(2025, "E0", refresh=True, fetcher=fetch)
 
         archived = sorted(fd.superseded_dir(2025, "E0").glob("E0_*.csv"))
         assert len(archived) == 1
         assert archived[0].read_bytes() == b"as it stood at seal time"
         assert path.read_bytes() == b"backfilled a month later"
 
-    def test_refresh_archives_nothing_when_upstream_is_unchanged(
-        self, project_root, monkeypatch
-    ) -> None:
+    def test_refresh_archives_nothing_when_upstream_is_unchanged(self, project_root) -> None:
         """Most refreshes change nothing; an archive per run would be noise, not evidence."""
         path = fd.raw_season_path(2025, "E0")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"identical")
 
-        monkeypatch.setattr(fd.requests, "get", _fake_get(b"identical"))
-        fd.fetch_season(2025, "E0", refresh=True)
+        fetch = mapping_fetcher({fd.season_csv_url(2025, "E0"): b"identical"})
+        fd.fetch_season(2025, "E0", refresh=True, fetcher=fetch)
 
         assert not fd.superseded_dir(2025, "E0").exists()
 
@@ -294,10 +291,10 @@ class TestFetch:
 
         assert len(fd.load_matches([2019], ("E0",), resolver=resolver)) == 3
 
-    def test_writes_the_bytes_upstream_sent(self, project_root, monkeypatch) -> None:
+    def test_writes_the_bytes_upstream_sent(self, project_root) -> None:
         payload = "Div,Date\r\nE0,19/08/00\r\n".encode("cp1252")
-        monkeypatch.setattr(fd.requests, "get", _fake_get(payload))
-        assert fd.fetch_season(2000, "E0").read_bytes() == payload
+        fetch = mapping_fetcher({fd.season_csv_url(2000, "E0"): payload})
+        assert fd.fetch_season(2000, "E0", fetcher=fetch).read_bytes() == payload
 
 
 class TestLoadMatches:
@@ -320,14 +317,3 @@ class TestLoadMatches:
         assert set(frame["season"]) == {2000, 2019}
 
 
-def _fake_get(payload: bytes):
-    class _Response:
-        content = payload
-
-        def raise_for_status(self) -> None:
-            return None
-
-    def _get(url, timeout=None):
-        return _Response()
-
-    return _get

@@ -1,5 +1,12 @@
 """Ingest: pull upstream data into the raw cache and clean it into canonical tables."""
 
+from epl.ingest.fetcher import (
+    Fetcher,
+    default_fetcher,
+    directory_fetcher,
+    http_fetcher,
+    mapping_fetcher,
+)
 from epl.ingest.fixtures import (
     FIXTURE_COLUMNS,
     FIXTURES_URL,
@@ -9,22 +16,24 @@ from epl.ingest.fixtures import (
 )
 from epl.ingest.football_data import (
     DIVISIONS,
-    FIRST_SEASON,
-    LAST_SEASON,
     MATCH_COLUMNS,
+    ODDS_AVAILABILITY_COLUMNS,
     SOURCE,
     IngestError,
     club_names_in_raw_cache,
     fetch_all,
     fetch_season,
     load_matches,
+    odds_availability,
+    odds_availability_for,
     parse_season_csv,
     raw_season_path,
     read_raw_csv,
     season_code,
     season_csv_url,
-    season_label,
+    superseded_dir,
 )
+from epl.windows import FIRST_SEASON, LAST_SEASON, season_label
 
 __all__ = [
     "DIVISIONS",
@@ -33,14 +42,22 @@ __all__ = [
     "FIXTURE_COLUMNS",
     "LAST_SEASON",
     "MATCH_COLUMNS",
+    "ODDS_AVAILABILITY_COLUMNS",
     "SOURCE",
+    "Fetcher",
     "IngestError",
     "club_names_in_raw_cache",
+    "default_fetcher",
+    "directory_fetcher",
     "fetch_all",
     "fetch_fixtures",
     "fetch_season",
+    "http_fetcher",
     "latest_fixtures_path",
     "load_matches",
+    "mapping_fetcher",
+    "odds_availability",
+    "odds_availability_for",
     "parse_fixtures",
     "parse_season_csv",
     "raw_season_path",
@@ -48,4 +65,5 @@ __all__ = [
     "season_code",
     "season_csv_url",
     "season_label",
+    "superseded_dir",
 ]

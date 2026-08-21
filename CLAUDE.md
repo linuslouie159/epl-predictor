@@ -43,7 +43,7 @@ Do not "fix" these without reading the linked ADR first:
 
 Design is complete and grilled. **Stage 1 is built**: the Miniforge environment
 (`environment.yml`), the Football-Data ingester (`src/epl/ingest/`) and the Club/Alias table
-(`src/epl/clubs/`, 115 Clubs across four tiers), with 131 tests.
+(`src/epl/clubs/`, 115 Clubs across four tiers), with 173 tests.
 
 Stage 2 is next: the metrics module — RPS, Brier, log loss, accuracy, calibration — unit-tested
 against hand-worked examples before any model uses it.
@@ -52,6 +52,6 @@ against hand-worked examples before any model uses it.
 conda env create -f environment.yml
 conda activate epl-predictor
 python -m epl.ingest fetch     # fill data/raw/ — 104 files, 26 Seasons x 4 tiers
-python -m epl.ingest build     # write data/processed/matches.csv — 52,672 matches
+python -m epl.ingest build     # write matches.csv (52,672) + odds_availability.csv
 pytest                         # add --run-network to also hit football-data.co.uk
 ```

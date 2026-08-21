@@ -24,19 +24,14 @@ import io
 from pathlib import Path
 
 import pandas as pd
-import requests
 
 from epl.clubs import ClubResolver
+from epl.ingest.fetcher import Fetcher, default_fetcher
 from epl.paths import raw_dir
+from epl.windows import FIRST_SEASON, LAST_SEASON, season_label
 
 #: The four English tiers Football-Data serves with an identical schema (ADR 0004).
 DIVISIONS: tuple[str, ...] = ("E0", "E1", "E2", "E3")
-
-#: First Season ingested. Match stats begin here (decision 2 in docs/DECISIONS.md).
-FIRST_SEASON = 2000
-
-#: Last Season ingested. 2025/26 closes the Evaluation Window.
-LAST_SEASON = 2025
 
 #: The source name under which Football-Data's spellings are registered as Aliases.
 SOURCE = "football-data"
@@ -147,6 +142,19 @@ MATCH_COLUMNS: tuple[str, ...] = (
 )
 
 
+#: Canonical column order for the per-Season record of which odds columns exist.
+#: ``prematch_average`` holds the spelling actually found - ``BbAv``, ``Avg``, or null.
+ODDS_AVAILABILITY_COLUMNS: tuple[str, ...] = (
+    "season",
+    "season_label",
+    "division",
+    "bet365",
+    "prematch_average",
+    "closing_average",
+    "has_market_line",
+)
+
+
 class IngestError(Exception):
     """The source data did not look the way this module requires."""
 
@@ -162,15 +170,6 @@ def season_code(season: int) -> str:
     '9900'
     """
     return f"{season % 100:02d}{(season + 1) % 100:02d}"
-
-
-def season_label(season: int) -> str:
-    """How a Season is written for humans.
-
-    >>> season_label(2005)
-    '2005/06'
-    """
-    return f"{season}/{(season + 1) % 100:02d}"
 
 
 def season_csv_url(season: int, division: str) -> str:
@@ -190,6 +189,7 @@ def fetch_season(
     division: str,
     *,
     refresh: bool = False,
+    fetcher: Fetcher | None = None,
     timeout: float = 60.0,
 ) -> Path:
     """Download one Season of one tier into the raw cache, and return the cached path.
@@ -207,7 +207,8 @@ def fetch_season(
     if path.exists() and not refresh:
         return path
 
-    content = fetch_bytes(season_csv_url(season, division), timeout=timeout)
+    fetcher = fetcher or default_fetcher(timeout)
+    content = fetcher(season_csv_url(season, division))
     _supersede(path, content)
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,10 +242,13 @@ def fetch_all(
     divisions: tuple[str, ...] = DIVISIONS,
     *,
     refresh: bool = False,
+    fetcher: Fetcher | None = None,
+    timeout: float = 60.0,
 ) -> list[Path]:
     """Fill the raw cache for every Season and tier. Returns the cached paths in order."""
+    fetcher = fetcher or default_fetcher(timeout)
     return [
-        fetch_season(season, division, refresh=refresh)
+        fetch_season(season, division, refresh=refresh, fetcher=fetcher)
         for season in _seasons(seasons)
         for division in divisions
     ]
@@ -381,6 +385,47 @@ def load_matches(
     ).reset_index(drop=True)
 
 
+def odds_availability_for(path: Path | str, season: int, division: str) -> pd.Series:
+    """Which odds columns one cached Season file actually carries."""
+    columns = set(read_raw_csv(path).columns)
+    prematch = next((spelling for spelling in ("BbAv", "Avg") if f"{spelling}H" in columns), pd.NA)
+
+    return pd.Series(
+        {
+            "season": season,
+            "season_label": season_label(season),
+            "division": division,
+            "bet365": {"B365H", "B365D", "B365A"} <= columns,
+            "prematch_average": prematch,
+            "closing_average": {"AvgCH", "AvgCD", "AvgCA"} <= columns,
+            "has_market_line": not pd.isna(prematch),
+        }
+    )
+
+
+def odds_availability(
+    seasons: range | list[int] | None = None,
+    divisions: tuple[str, ...] = DIVISIONS,
+) -> pd.DataFrame:
+    """One row per cached Season and tier, recording which odds columns it carries.
+
+    The point is that absence and value become indistinguishable downstream once a column is a
+    float column full of nulls. A Season with no Market Line is not a Season where the market
+    priced a home win at nothing — it is a Season with no market to compare against, and ADR 0001
+    says those Seasons simply have no market comparison. Benchmark code reads this table rather
+    than re-deriving the era boundaries from the raw files.
+    """
+    rows = [
+        odds_availability_for(path, season, division)
+        for season in _seasons(seasons)
+        for division in divisions
+        if (path := raw_season_path(season, division)).exists()
+    ]
+    if not rows:
+        return pd.DataFrame(columns=list(ODDS_AVAILABILITY_COLUMNS))
+    return pd.DataFrame(rows)[list(ODDS_AVAILABILITY_COLUMNS)].reset_index(drop=True)
+
+
 def club_names_in_raw_cache(
     seasons: range | list[int] | None = None,
     divisions: tuple[str, ...] = DIVISIONS,
@@ -448,21 +493,6 @@ def require_columns(frame: pd.DataFrame, required: set[str], path: Path | str) -
     missing = required - set(frame.columns)
     if missing:
         raise IngestError(f"{path}: missing required columns {sorted(missing)}")
-
-
-def fetch_bytes(url: str, *, timeout: float) -> bytes:
-    """Fetch ``url`` and return its bytes, unaltered."""
-    response = requests.get(url, timeout=timeout)
-    response.raise_for_status()
-    return response.content
-
-
-def download(url: str, path: Path, *, timeout: float) -> Path:
-    """Fetch ``url`` and write its bytes to ``path`` verbatim, creating the directory if needed."""
-    content = fetch_bytes(url, timeout=timeout)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    return path
 
 
 def _parse_season_dates(values: pd.Series, season: int, path: Path | str) -> pd.Series:

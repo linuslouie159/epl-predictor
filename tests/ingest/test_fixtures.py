@@ -7,7 +7,7 @@ import datetime as dt
 import pytest
 
 from epl.ingest import fixtures as fx
-from epl.ingest import football_data as fd
+from epl.ingest.fetcher import mapping_fetcher
 from epl.ingest.football_data import IngestError
 
 
@@ -75,23 +75,16 @@ class TestCachePaths:
             (fx.fixtures_dir() / f"fixtures_{stamp}.csv").write_bytes(b"x")
         assert fx.latest_fixtures_path().name == "fixtures_20260828T090000Z.csv"
 
-    def test_fetch_never_overwrites_an_earlier_fetch(self, project_root, monkeypatch) -> None:
-        monkeypatch.setattr(fd.requests, "get", _fake_get(b"week one"))
-        first = fx.fetch_fixtures(fetched_at=dt.datetime(2026, 8, 21, 9, 0, tzinfo=dt.UTC))
-        monkeypatch.setattr(fd.requests, "get", _fake_get(b"week two"))
-        second = fx.fetch_fixtures(fetched_at=dt.datetime(2026, 8, 28, 9, 0, tzinfo=dt.UTC))
+    def test_fetch_never_overwrites_an_earlier_fetch(self, project_root) -> None:
+        first = fx.fetch_fixtures(
+            fetched_at=dt.datetime(2026, 8, 21, 9, 0, tzinfo=dt.UTC),
+            fetcher=mapping_fetcher({fx.FIXTURES_URL: b"week one"}),
+        )
+        second = fx.fetch_fixtures(
+            fetched_at=dt.datetime(2026, 8, 28, 9, 0, tzinfo=dt.UTC),
+            fetcher=mapping_fetcher({fx.FIXTURES_URL: b"week two"}),
+        )
         assert first.read_bytes() == b"week one"
         assert second.read_bytes() == b"week two"
 
 
-def _fake_get(payload: bytes):
-    class _Response:
-        content = payload
-
-        def raise_for_status(self) -> None:
-            return None
-
-    def _get(url, timeout=None):
-        return _Response()
-
-    return _get

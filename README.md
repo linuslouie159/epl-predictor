@@ -100,7 +100,7 @@ conda activate epl-predictor
 ```
 python -m epl.ingest fetch              # fill data/raw/ — 104 files, 26 Seasons x 4 tiers, ~16 MB
 python -m epl.ingest fetch --refresh    # re-download, including the growing current Season
-python -m epl.ingest build              # write data/processed/matches.csv — 52,672 matches
+python -m epl.ingest build              # write matches.csv (52,672) + odds_availability.csv
 python -m epl.ingest fixtures           # fetch the rolling forward-Fixture file + Market Line
 python -m epl.ingest clubs              # audit: Club spellings the Alias table does not know
 python -m epl.clubs.build               # rebuild clubs.csv, aliases.csv, teamname_replacements.json
@@ -117,6 +117,19 @@ already published — and losing what the cache held at seal time is exactly the
 
 Narrowing `--seasons` or `--divisions` prints a warning: a subset table is fine for a quick look and
 must not be used to score a Predictor ([ADR 0004](./docs/adr/0004-rate-the-whole-pyramid.md)).
+
+`odds_availability.csv` records, per Season and tier, which odds columns the source actually carried
+— Bet365 from 2002/03, `BbAv*` from 2005/06, `Avg*` and `AvgC*` from 2019/20. It exists because once
+odds are a float column full of nulls, a Season with no market is indistinguishable from one the
+market priced at nothing. Benchmark code reads this rather than re-deriving the era boundaries.
+
+Everything that reaches upstream takes an injectable `fetcher`, so tests run against local fixtures
+with no network access and without patching anything:
+
+```python
+from epl.ingest import fetch_season, mapping_fetcher, directory_fetcher
+fetch_season(2025, "E0", fetcher=directory_fetcher("tests/data"))
+```
 
 ## Tests
 

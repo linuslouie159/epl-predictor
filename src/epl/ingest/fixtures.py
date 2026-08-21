@@ -20,10 +20,10 @@ from pathlib import Path
 import pandas as pd
 
 from epl.clubs import ClubResolver
+from epl.ingest.fetcher import Fetcher, default_fetcher
 from epl.ingest.football_data import (
     DIVISIONS,
     SOURCE,
-    download,
     parse_dates,
     read_raw_csv,
     require_columns,
@@ -80,11 +80,17 @@ def raw_fixtures_path(fetched_at: dt.datetime) -> Path:
 def fetch_fixtures(
     *,
     fetched_at: dt.datetime | None = None,
+    fetcher: Fetcher | None = None,
     timeout: float = 60.0,
 ) -> Path:
     """Download the rolling fixtures file into the raw cache, and return the cached path."""
     fetched_at = fetched_at or dt.datetime.now(dt.UTC)
-    return download(FIXTURES_URL, raw_fixtures_path(fetched_at), timeout=timeout)
+    fetcher = fetcher or default_fetcher(timeout)
+
+    path = raw_fixtures_path(fetched_at)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(fetcher(FIXTURES_URL))
+    return path
 
 
 def latest_fixtures_path() -> Path | None:
