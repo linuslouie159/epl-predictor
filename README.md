@@ -89,3 +89,42 @@ outputs/live/        SEALED, committed, append-only, never rewritten
 Miniforge + conda-forge; `environment.yml` is the source of truth. PyMC with `nutpie` for the
 Bayesian fits, pytest for tests. See [ADR 0009](./docs/adr/0009-conda-forge-toolchain.md) for why not
 pip and venv.
+
+```
+conda env create -f environment.yml
+conda activate epl-predictor
+```
+
+## Running the ingest
+
+```
+python -m epl.ingest fetch              # fill data/raw/ — 104 files, 26 Seasons x 4 tiers, ~16 MB
+python -m epl.ingest fetch --refresh    # re-download, including the growing current Season
+python -m epl.ingest build              # write data/processed/matches.csv — 52,672 matches
+python -m epl.ingest fixtures           # fetch the rolling forward-Fixture file + Market Line
+python -m epl.ingest clubs              # audit: Club spellings the Alias table does not know
+python -m epl.clubs.build               # rebuild clubs.csv, aliases.csv, teamname_replacements.json
+```
+
+`clubs` exits non-zero on an unknown spelling. That is deliberate — a Club whose name fails to map
+would have its rating history split in two at the point the spelling changed, and pyramid-wide Elo
+would carry that split across a promotion without anything looking wrong.
+
+`--refresh` does not overwrite. When upstream's bytes differ from the cached ones, the cached copy
+moves to `superseded/` first, because the current Season's file backfills results and odds into rows
+already published — and losing what the cache held at seal time is exactly the failure
+[ADR 0005](./docs/adr/0005-split-prediction-ledger.md) exists to prevent.
+
+Narrowing `--seasons` or `--divisions` prints a warning: a subset table is fine for a quick look and
+must not be used to score a Predictor ([ADR 0004](./docs/adr/0004-rate-the-whole-pyramid.md)).
+
+## Tests
+
+```
+pytest                  # unit tests, plus corpus integrity checks when data/raw/ is populated
+pytest --run-network    # also hits football-data.co.uk
+```
+
+Tests marked `cache` re-derive the measured facts in [docs/DECISIONS.md](./docs/DECISIONS.md) from
+the ingested corpus rather than trusting them, and skip when `data/raw/` is absent. Tests marked
+`network` check that upstream still serves the shapes the live loop assumes.

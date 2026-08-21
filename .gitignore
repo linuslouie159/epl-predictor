@@ -7,6 +7,11 @@
 # Not committed: large, and the whole point is that it mirrors an external source.
 data/raw/
 
+# Cleaned tables, rebuilt from the raw cache by `python -m epl.ingest build`.
+# Regenerable and deterministic, so it is code output rather than evidence (same reasoning as
+# outputs/backtest/ in ADR 0005).
+data/processed/
+
 # Backtest predictions are regenerable from code + raw cache (ADR 0005).
 # outputs/live/ is deliberately NOT ignored — it is sealed evidence and must be committed.
 outputs/backtest/
@@ -15,6 +20,8 @@ outputs/backtest/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .ipynb_checkpoints/
 *.egg-info/
 build/

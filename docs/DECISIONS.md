@@ -35,17 +35,38 @@ an ADR in [adr/](./adr/); the rest are recorded only here.
 - **Reporting**: every metric is reported both pre-calibration and post-calibration, so a large correction is a visible warning about the underlying model rather than a silent fix.
 - **Tiebreakers**: the Season Projection implements the full chain — points, goal difference, goals scored, head-to-head points, head-to-head away goals. The neutral-ground play-off is treated as a coin flip.
 
+Added at stage 1:
+
+- **`data/processed/` is gitignored.** It is rebuilt from the raw cache by `python -m epl.ingest build` and is deterministic, so it is code output rather than evidence — the same reasoning ADR 0005 applies to `outputs/backtest/`.
+- **A refreshed raw file is superseded, not overwritten.** Re-fetching a Season whose upstream bytes have changed moves the previous copy to `superseded/` first. Overwriting would destroy the only record of what the cache held when a Sealed Prediction was made, which is the failure ADR 0005 exists to prevent.
+- **The Club table is generated, not hand-maintained.** `python -m epl.clubs.build` rebuilds `clubs.csv` and `aliases.csv` from a single spelling-to-Club mapping, and fails if the raw cache holds a spelling it does not cover or names a Club the cache never fielded. It also writes `teamname_replacements.json`.
+- **ruff and mypy** are in `environment.yml` and configured in `pyproject.toml`, so style and typing are tooling concerns rather than review concerns.
+- **`arviz` is pinned below 1.0.** arviz 1.x moved to xarray's DataTree and removed `InferenceData`, which pymc 5.x imports at load; solved unpinned, `import pymc` fails outright. `gxx` is likewise pinned in, because without it PyTensor silently falls back to a slow Python implementation — the exact failure ADR 0009 chose conda-forge to avoid.
+
 ## Measured facts
 
 Derived from the source data during design. Recorded so they need not be re-derived — but re-verify
 before relying on any of them.
+
+**Re-verified at stage 1 (21 Aug 2026)** against the full ingested corpus — 52,672 matches over
+26 Seasons and four tiers. `tests/ingest/test_raw_cache_integrity.py` re-derives these from the data
+on every run rather than trusting the numbers below. Confirmed exactly: the 7,980-fixture Evaluation
+Window; Naive Baseline H 45.56% / D 24.32% / A 30.11%; mean overround 1.05616; the era boundaries for
+`BbAv*`/`Avg*` (2005/06) and `AvgC*` (2019/20); 380 Premier League fixtures in every Season.
+Three corrections:
+
+- Match stats are **99.98% populated, not 100%** — nine rows across the whole pyramid lack them
+  (six in 2002/03, two in 2016/17, one in 2018/19).
+- **Referee is only 18.7% populated in 2012/13**, and ~97% overall. No v1 model uses it.
+- The lower tiers are 552 rows per Season **except 2019/20**, where COVID curtailed League One
+  (400 rows) and League Two (440). The Premier League completed that Season.
 
 ### Football-Data era boundaries (English tiers)
 
 | From | What appears |
 |---|---|
 | 1993/94 | Result only. 1993/94–1994/95 have 462 fixtures (22 clubs) |
-| 2000/01 | Match stats: shots, shots on target, corners, fouls, cards, referee. 100% populated |
+| 2000/01 | Match stats: shots, shots on target, corners, fouls, cards, referee. 99.98% populated — see the re-verification note below |
 | 2002/03 | Bet365 pre-match odds |
 | 2005/06 | Market-average pre-match (`BbAvH/D/A`) |
 | 2012/13 | Pinnacle closing (`PSC*`) |
@@ -114,7 +135,7 @@ weekend fixtures, Tuesday afternoon for midweek ones.
 ## Open risks
 
 1. **BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.
-2. **The live path is untested.** As of 20 Aug 2026, `fixtures.csv` held no E0 rows and `mmz4281/2627/E0.csv` did not exist. The 2026/27 season starts 21 Aug 2026; both should appear once matches begin. Verify before relying on the live loop.
+2. **The live path is only half tested.** Re-checked 21 Aug 2026: `fixtures.csv` is reachable and parses, but it still holds a single English row (one E2 fixture) and no E0 rows, and `mmz4281/2627/E0.csv` still does not exist. The transport is proven; the E0 live path is not. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — the check that must pass before a live Prediction Round can be sealed.
 3. **MyFootballFacts parseability is unverified.** Content correctness was confirmed — a 2025/26 result cross-checked exactly against Football-Data — but the HTML has not been parsed across all nine season pages.
 4. **Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable. This sits inside the Burn-In Window so it should not reach scored results, but it is worth watching.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.

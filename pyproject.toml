@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "epl-predictor"
+version = "0.1.0"
+description = "Calibrated Premier League forecasting, scored honestly against the market and the pundits"
+requires-python = ">=3.12"
+# Runtime dependencies live in environment.yml, which is the source of truth (ADR 0009).
+# They are deliberately not duplicated here; this file exists to make `src/epl` importable
+# and to configure the test runner.
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# The canonical Club table and its Aliases are data that ships with the code (CONTEXT.md: aliases
+# are data, never model code).
+"epl.clubs" = ["*.csv"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF"]
+
+[tool.mypy]
+files = ["src"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "network: hits football-data.co.uk; skipped unless --run-network is passed",
+    "cache: needs a populated data/raw/ cache; skipped when it is absent",
+]

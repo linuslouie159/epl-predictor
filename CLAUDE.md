@@ -27,6 +27,9 @@ Do not "fix" these without reading the linked ADR first:
 - **Dixon-Coles is fitted two different ways** — MLE and Bayesian. [ADR 0007](./docs/adr/0007-mle-for-matches-bayesian-for-projections.md)
 - **The pundit's published scoreline is transformed before scoring.** [ADR 0003](./docs/adr/0003-calibrated-pundit-predictor.md)
 - **Two prediction stores exist, not one**, and one of them must never be rewritten. [ADR 0005](./docs/adr/0005-split-prediction-ledger.md)
+- **Refreshing a cached raw file archives the old bytes** into `superseded/` instead of replacing
+  them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
+  Both are explained where they live — `src/epl/ingest/football_data.py` and `src/epl/clubs/table.py`.
 
 ## Never do this
 
@@ -38,5 +41,17 @@ Do not "fix" these without reading the linked ADR first:
 
 ## Status
 
-Design is complete and grilled. **No implementation exists yet.** Stage 1 is: `git init`, the
-Miniforge environment, the Football-Data ingester, and the Club/Alias table.
+Design is complete and grilled. **Stage 1 is built**: the Miniforge environment
+(`environment.yml`), the Football-Data ingester (`src/epl/ingest/`) and the Club/Alias table
+(`src/epl/clubs/`, 115 Clubs across four tiers), with 131 tests.
+
+Stage 2 is next: the metrics module — RPS, Brier, log loss, accuracy, calibration — unit-tested
+against hand-worked examples before any model uses it.
+
+```
+conda env create -f environment.yml
+conda activate epl-predictor
+python -m epl.ingest fetch     # fill data/raw/ — 104 files, 26 Seasons x 4 tiers
+python -m epl.ingest build     # write data/processed/matches.csv — 52,672 matches
+pytest                         # add --run-network to also hit football-data.co.uk
+```

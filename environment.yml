@@ -1,0 +1,65 @@
+# The single source of truth for this project's dependencies (ADR 0009).
+#
+# This machine has no C/C++ toolchain, which rules out cmdstanpy and degrades PyMC's PyTensor
+# backend to a slow Python fallback under plain pip. conda-forge ships prebuilt binaries and the
+# compilers, so the scientific stack installs rather than builds.
+#
+#   conda env create -f environment.yml
+#   conda activate epl-predictor
+#
+# Versions are deliberately unpinned in v1: nothing here is at a version boundary that matters, and
+# a lock file would be one more thing to keep honest. Pin when a result becomes reproducible-critical.
+name: epl-predictor
+
+channels:
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  - python=3.12
+
+  # Ingest, cleaning, stored tables (CSV everywhere in v1 — small, git-diffable, readable as evidence)
+  - pandas
+  - numpy
+  - requests
+
+  # Pundit scrapers (MyFootballFacts backfill, BBC live)
+  - beautifulsoup4
+  - lxml
+  - html5lib
+
+  # Metrics, ordered logit, Dixon-Coles MLE, isotonic calibration layer
+  - scipy
+  - scikit-learn
+
+  # Reliability diagrams and scoreboard plots
+  - matplotlib
+
+  # The C++ toolchain ADR 0009 chose conda-forge to supply. Without it PyTensor silently falls back
+  # to a Python implementation and warns that performance "may be severely degraded" — which would
+  # make the Season Projection fits (ADR 0007) far slower than the ADR assumes.
+  - gxx
+
+  # Bayesian posterior for Season Projections only (ADR 0007). nutpie is the fast NUTS sampler;
+  # JAX/NumPyro is avoided because it has no official Windows binaries.
+  #
+  # arviz is pinned below 1.0 because that release moved to xarray's DataTree and removed
+  # `InferenceData` and `concat`, which pymc 5.x imports at module load. Solved unpinned, conda
+  # picks arviz 1.x and `import pymc` fails outright. This is the one place a floating version
+  # breaks the build rather than merely drifting.
+  - pymc
+  - nutpie
+  - arviz <1
+
+  # Tests. The metrics module is unit-tested against hand-worked examples before any model uses it.
+  - pytest
+  - pytest-cov
+
+  # Lint and types. Configured in pyproject.toml; run as `ruff check src tests` and `mypy`.
+  - ruff
+  - mypy
+
+  # Editable install of src/epl into the environment
+  - pip
+  - pip:
+      - --editable .
