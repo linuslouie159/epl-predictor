@@ -170,6 +170,34 @@ class TestParseSeasonCsv:
         frame = fd.parse_season_csv(data_dir / "E0_1920_sample.csv", 2019, "E0", resolver=resolver)
         assert tuple(frame.columns) == fd.MATCH_COLUMNS
 
+    def test_a_22_club_season_of_462_fixtures_parses_intact(self, write_csv, resolver) -> None:
+        """Fixture counts come from the data, never from an assumed 380.
+
+        Seasons before 1995/96 had 22 Clubs and 462 Fixtures. Those Seasons sit outside the
+        ingested range today, but the loader must not be the reason they could not be added — an
+        assumption of 380 anywhere would silently truncate or misalign them.
+        """
+        # The actual 1994/95 Premier League, in Football-Data's spellings.
+        clubs = [
+            "Arsenal", "Aston Villa", "Blackburn", "Chelsea", "Coventry", "Crystal Palace",
+            "Everton", "Ipswich", "Leeds", "Leicester", "Liverpool", "Man City", "Man United",
+            "Newcastle", "Norwich", "Nott'm Forest", "QPR", "Sheffield Weds", "Southampton",
+            "Tottenham", "West Ham", "Wimbledon",
+        ]
+        assert len(clubs) == 22
+
+        rows = [
+            f"E0,20/08/94,{home},{away},2,1,H"
+            for home in clubs
+            for away in clubs
+            if home != away
+        ]
+        path = write_csv("season_1994.csv", "Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR", *rows)
+
+        frame = fd.parse_season_csv(path, 1994, "E0", resolver=resolver)
+        assert len(frame) == 462
+        assert frame["home_club"].nunique() == 22
+
     def test_drops_rows_with_no_outcome(self, write_csv, resolver) -> None:
         """A Season file occasionally carries an unplayed or abandoned Fixture."""
         path = write_csv(

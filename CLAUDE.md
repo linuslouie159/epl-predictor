@@ -43,7 +43,8 @@ Do not "fix" these without reading the linked ADR first:
 
 Design is complete and grilled. **Stage 1 is built**: the Miniforge environment
 (`environment.yml`), the Football-Data ingester (`src/epl/ingest/`) and the Club/Alias table
-(`src/epl/clubs/`, 115 Clubs across four tiers), with 173 tests.
+(`src/epl/clubs/`, 115 Clubs across four tiers), with 206 tests. The remaining six modules from
+the README layout exist as documented shells, each naming the issue that builds it.
 
 Stage 2 is next: the metrics module — RPS, Brier, log loss, accuracy, calibration — unit-tested
 against hand-worked examples before any model uses it.

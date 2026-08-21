@@ -75,6 +75,22 @@ class TestCoverage:
         """The cost of rating the whole pyramid, as estimated in ADR 0004."""
         assert 42_000 < len(matches[matches["division"] != "E0"]) < 44_000
 
+    def test_the_corpus_is_the_size_the_spec_expected(self, matches) -> None:
+        """Issue 3 expected ~52,900: about 9,880 in E0 and about 43,000 across E1-E3.
+
+        The lower tiers come to 42,792 rather than the 43,056 a full 26 x 552 x 3 would give, and
+        the 264-match difference is exactly the COVID curtailment of League One and League Two in
+        2019/20. Worth asserting rather than waving at, because "a few hundred short
+        of the estimate" is also what a quietly dropped tier or a truncated Season looks like.
+        """
+        e0 = matches[matches["division"] == "E0"]
+        lower = matches[matches["division"] != "E0"]
+
+        assert len(e0) == 9_880
+        assert len(lower) == 26 * 552 * 3 - 264
+        assert len(lower) == 42_792
+        assert len(matches) == 52_672
+
 
 class TestClubResolution:
     def test_every_spelling_in_the_cache_resolves(self) -> None:
