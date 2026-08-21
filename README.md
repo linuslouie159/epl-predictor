@@ -62,6 +62,11 @@ market-average pre-match (`BbAv*`) from 2005/06 spliced to `Avg*` from 2019/20, 
 Stages 5 and 7 were moved: the Season Projection needs goal difference (24 of 26 Seasons had points
 ties), so it cannot be built on Elo alone; the Pundit tracker needs no model at all, so it comes early.
 
+The list above is the shape of the system, not the order the tickets unblock in. The **Prediction
+ledger and the Naive Baseline (#7) come before Elo**, not after the benchmarks: one Predictor has to
+go through the whole pipeline and out the other side scored before a real model is worth building on
+top of it. The tracker's `Blocked by` fields are authoritative where the two disagree.
+
 ## Deferred to v2
 
 XGBoost / ML layer, the Golden Boot player model, and the API-Football client. Each gets a written

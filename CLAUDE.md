@@ -51,7 +51,7 @@ Design is complete and grilled.
 every expected value worked by hand before any model uses it.
 
 The remaining five modules from the README layout exist as documented shells, each naming the issue
-that builds it. Stage 3 is next: pyramid-wide Elo through an ordered logit (issue #9).
+that builds it.
 
 Two things about stage 2 worth knowing before building on it:
 
@@ -63,6 +63,26 @@ Two things about stage 2 worth knowing before building on it:
 - **There are 1,189 Prediction Rounds, not the 1,332 the design recorded.** The anchor rule is
   stated as executable code and was kept; the unreproducible count was corrected. See
   [docs/DECISIONS.md](./docs/DECISIONS.md).
+
+## What to build next
+
+**Issue #7 — split prediction ledger and the Naive Baseline scored end to end.** It is the only
+substantial ticket whose blockers are all closed, and everything else is behind it: #8, #9 and #11
+name it directly, and #10 and #12–#17 sit behind those.
+
+Take the tracker's dependency graph over the README's build order where they disagree, and they do
+disagree here. The README lists Elo third and never names the ledger as a stage, but #9 is blocked
+by #7 — the ledger ticket is the tracer bullet that puts one Predictor through the whole pipeline
+and out the other side scored, so that Elo, the benchmarks and the Pundits land on something that
+already works end to end. Check the graph before starting:
+
+```
+gh issue view <n> | sed -n '/## Blocked by/,$p'
+```
+
+Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
+unblocked since stage 1, needs nothing from #7, and is small — pick it up when a stage lands and
+there is no appetite to start the next one.
 
 ```
 conda env create -f environment.yml
