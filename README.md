@@ -15,6 +15,7 @@ Measured on the Evaluation Window (2005/06–2025/26, 7,980 Fixtures):
 | Predictor | RPS | Meaning |
 |---|---|---|
 | Naive Baseline | 0.2294 | the floor — beat this or the model has no value |
+| Elo | 0.1994 | the first real model, built |
 | **Target** | **≤ 0.1986** | market + 0.005 — this is success |
 | Market Line | 0.1936 | the opponent |
 | Ceiling Line | 0.1968* | reference only; knows team news we don't |
@@ -25,6 +26,10 @@ by 0.0013 RPS, which is what a few hours of team news is worth.
 
 The system does **not** need to beat the market. It needs to be leak-free, well calibrated, and
 within a stated distance of the market while beating the Naive Baseline and the Pundits.
+
+Elo alone takes **0.030 of the 0.036 RPS** the market takes out of the floor — 84% of the available
+edge from ratings and nothing else. The 0.0008 it still sits above the target is what the shared
+calibration layer and Dixon-Coles are for.
 
 ## The one rule
 
@@ -88,7 +93,7 @@ src/epl/predictors.py   the Predictor contract, the Evidence a Predictor sees, t
 src/epl/ingest/         football-data, pundit scrapers
 src/epl/clubs/          canonical Club table + Alias resolution
 src/epl/metrics/        RPS, Brier, log loss, calibration
-src/epl/models/         elo, ordered logit, dixon-coles, calibration layer
+src/epl/models/         elo.py, ordered_logit.py, burn_in.py; dixon-coles and the calibration layer
 src/epl/benchmarks/     market line + ceiling line (vig.py), naive baseline
 outputs/overround.csv   the margin in each book per Season; regenerable, gitignored
 src/epl/pundits/        grading + Calibrated Pundit
@@ -267,3 +272,37 @@ quietly stopped removing anything would show up there before it showed up on the
 Seasons 2000/01–2001/02 carry no odds at all. Each line declares which Fixtures it `covers`, so
 those Seasons produce no rows rather than invented ones — no market comparison, not a market
 comparison of zero.
+
+## Elo
+
+One rating pool across all four tiers, folded forward in kickoff order, mapped onto three
+probabilities by an ordered logit. It scores **0.19943 RPS** over the Evaluation Window.
+
+```python
+from epl.models import ELO, Ratings, Settings
+
+ELO.predict(fixtures, evidence)        # (n, 3) over (Home, Draw, Away)
+ELO.ratings_at(evidence).rating("leeds")
+```
+
+Nothing in the model knows what a division is. A Club that is promoted is a Club whose next
+opponents happen to be better, which is the whole mechanism — Elo is zero-sum, so ratings stay
+comparable across tiers connected only by promotion and relegation (ADR 0004). Measured: the three
+Clubs promoted for 2005/06 arrive on 1679.8, 1623.9 and 1565.6, each from over 200 matches, and by
+the first scored Prediction Round the thinnest Premier League rating rests on 190.
+
+The draw band is never coded, only fitted. Across ten Supremacy deciles Elo's predicted draw rate
+falls **30.2% → 14.5%**, monotonically, and the rate that actually happened falls 27.6% → 13.8%.
+
+```
+python -m epl.models fit       # re-derive the frozen hyperparameters on the Burn-In Window
+python -m epl.models draws     # the draw rate against Supremacy, predicted and observed
+python -m epl.models ratings   # the pool at a Season's first Prediction Round
+```
+
+`epl.models.burn_in` is the only place a hyperparameter may be fitted, and it cuts the corpus to
+2000/01–2004/05 before it walks a single match — so handing it the whole 26 Seasons is
+indistinguishable from handing it the five (ADR 0008). 2000/01 warms the ratings and is not fitted
+on. What it found — K 28.5, home advantage 80 rating points, a logit scale of 186.9 and a draw band
+of ±0.6232 — is frozen as literals in `models/elo.py`, and `python -m epl.models fit` prints the
+fit beside them so the two cannot drift apart in silence.

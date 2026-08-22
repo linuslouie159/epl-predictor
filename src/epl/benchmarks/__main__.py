@@ -25,9 +25,9 @@ import pandas as pd
 
 from epl import metrics
 from epl.benchmarks import market, vig
-from epl.ingest import DIVISIONS
+from epl.ingest import DIVISIONS, match_table
 from epl.ledger import backtest
-from epl.paths import outputs_dir, processed_dir
+from epl.paths import outputs_dir
 from epl.windows import EVALUATION_WINDOW, season_label
 
 #: A typical Premier League book, for ``methods``: a favourite, a draw and a longshot.
@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _overround(matches_path: Path | None, divisions: tuple[str, ...]) -> int:
-    report = market.overround_report(_load_matches(matches_path))
+    report = market.overround_report(match_table(matches_path))
     destination = path()
     destination.parent.mkdir(parents=True, exist_ok=True)
     report.to_csv(destination, index=False, float_format="%.5f", lineterminator="\n")
@@ -96,7 +96,7 @@ def _methods(matches_path: Path | None) -> int:
         print(f"  {name:>9}: {home:.6f} {draw:.6f} {away:.6f}{_default_marker(name)}")
     print("  power and Shin correct favourite-longshot bias; normalisation does not (ADR 0001)")
 
-    scored = _scorable(_load_matches(matches_path))
+    scored = _scorable(match_table(matches_path))
     window = f"{season_label(min(EVALUATION_WINDOW))}-{season_label(max(EVALUATION_WINDOW))}"
     print(f"\nthe Market Line over {window}, {len(scored)} Fixtures:")
 
@@ -127,18 +127,6 @@ def _scorable(matches: pd.DataFrame) -> pd.DataFrame:
         & matches["division"].isin(list(backtest.SCORED_DIVISIONS))
     ]
     return window.loc[market.MARKET_LINE.covers(window)].reset_index(drop=True)
-
-
-def _load_matches(path: Path | None) -> pd.DataFrame:
-    """The cleaned match table, or an instruction for how to make one."""
-    source = path or processed_dir() / "matches.csv"
-    if not source.exists():
-        raise SystemExit(
-            f"{source} does not exist. Build it first:\n"
-            "    python -m epl.ingest fetch\n"
-            "    python -m epl.ingest build"
-        )
-    return pd.read_csv(source, dtype={"time": "string"})
 
 
 if __name__ == "__main__":

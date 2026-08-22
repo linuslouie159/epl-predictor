@@ -90,6 +90,7 @@ There is **no xG anywhere** in Football-Data. Understat starts 2014/15; FBref ad
 | Predictor | RPS |
 |---|---|
 | Naive Baseline (H 45.6% / D 24.3% / A 30.1%) | 0.2292 |
+| Elo through an ordered logit | 0.19943 |
 | Market Line, normalised | 0.19379 |
 | Market Line, Shin | 0.19362 |
 | Market Line, power | 0.19359 |
@@ -127,7 +128,7 @@ a book, and the per-tier overround report walks the whole pyramid.
 ### Other measurements
 
 - **Prediction Rounds**: **1,189** across 2000/01–2025/26 (mean 45.7 per season, 8.31 fixtures per round). Corrected at stage 2 — the design recorded 1,332 / 51.2 / 7.42, which the anchor rule below does not produce over this corpus. See the note under *Measured facts*.
-- **Draw rate vs Supremacy**: 32.3% when evenly matched, falling monotonically to 13.4% at the widest mismatch. A 2.4x range.
+- **Draw rate vs Supremacy**: 32.3% when evenly matched, falling monotonically to 13.4% at the widest mismatch. A 2.4x range. This is the *observed* rate bucketed by **market** Supremacy; re-measured at stage 5 over deciles it is 32.0% → 13.7%. Elo's own curve is different and is recorded under *Measured at stage 5* — bucketing by a noisier Supremacy makes the most-even decile a less even set of Fixtures.
 - **Promoted clubs** (75 club-seasons): mean 36.9 points vs a league average of 52.0; lose 51.5% of matches; 35 of 75 finished on 35 points or fewer. The penalty is unstable — 44.0 points for the 2010/11 intake, 19.7 for 2024/25.
 - **Within-season drift** (520 club-seasons): first-half vs second-half PPG correlation 0.686; observed SD of the difference 0.390 against 0.400 expected from sampling noise alone. Implied true drift: **zero**.
 - **Points ties**: 24 of 26 seasons had at least one, averaging 3.3 tied pairs. This is why the Season Projection needs goals, not just Outcomes.
@@ -256,10 +257,59 @@ The vig removal itself is `epl.benchmarks.vig`: `normalise`, `power` and `shin` 
 `remove(book, method=...)`, solved by fixed-step bisection rather than to a tolerance so that a
 rebuilt backtest file is byte-identical to the last one (ADR 0005).
 
+## Elo through an ordered logit
+
+Added at stage 5 (issue #9), the first real model. `epl.models.elo` is the rating pool,
+`epl.models.ordered_logit` the mapping from one edge to three probabilities, `epl.models.burn_in`
+the only place either is fitted.
+
+- **The fitted draw band is symmetric, and the fit is not allowed to move its centre.** An edge already carries what playing at home is worth, so an edge of zero is a genuinely even contest — and at an even contest Home and Away must be equally likely, or the model is claiming a home advantage it has already counted. Fitted free, the band's centre becomes a second home-advantage parameter pointing the other way, and the two are then only weakly told apart. Measured on the Burn-In Window two ways: held at one arbitrary pair of Elo constants (K 30, home advantage 100) the free band scores 0.20552 against the centred band's 0.20583, a gap of 0.0003 RPS; searched end to end, where K and the home advantage move too, the free band reaches 0.20550 and the centred one **0.20554** — **0.00004 RPS**, for a home-advantage constant that goes from 80 rating points to **155** with the band shifted back to cancel most of it. One parameter, in the place where it also moves the ratings, is the honest version of the same model.
+- **2000/01 warms the ratings up and is not fitted on.** Every Club starts the corpus at the same conventional 1500, so a Season in which the model knows nothing about anybody would mostly teach the fit to learn fast. That is open risk 4 surfacing *inside* the Burn-In Window. The choice is made on that reasoning alone and never compared against an Evaluation Window score, which would be the leak ADR 0008 exists to stop.
+- **The fit refuses a winner sitting on the wall of its own grid.** The home-advantage grid originally stopped at 140 rating points, the answer sat on it, and the refinement passes then re-centred on the boundary and reported 155 as though it were fitted. A search that stops at the edge of what it was allowed to consider has not found an optimum. Two candidates have no interior, so the check has nothing to say there — which is what lets a test afford a grid at all.
+- **RPS is the objective, not log loss.** RPS is what the scoreboard reports and what the project is judged on (CLAUDE.md), and it is strictly proper for ordinal Outcomes, so minimising it is not a shortcut. Log loss is reported beside it and agrees.
+- **Elo rebuilds its rating pool at every Prediction Round rather than folding one forward.** That is 53 seconds for a full backfill instead of about one. It is bought deliberately: a pool carried between calls has to judge whether the Evidence it was just handed extends the one it folded last, and getting that wrong is the one failure this project cannot see — the ratings would be built from the wrong matches while every stored row still audited clean, because `inputs_seen` and `latest_input` are a receipt from `Evidence` and not from the model.
+- **No regression to the mean between Seasons, and no cross-tier offset.** Issue #9 names three hyperparameters and a summer decay would be a fourth that had to be fitted like the others. The offset is unnecessary by construction: Elo is zero-sum, so a tier's level is expressed by the Clubs promoted into and relegated out of it.
+
+### Measured at stage 5 (22 Aug 2026)
+
+Re-derived on every run by `tests/models/test_elo_over_the_corpus.py`, which skips when `data/raw/`
+is absent.
+
+Fitted on 2001/02–2004/05's 1,520 Premier League Fixtures, warmed from 2000/01, over 10,180
+matches across all four tiers: **K 28.5, home advantage 80 rating points, logit scale 186.92,
+cutpoints ±0.62318**. It scores 0.20554 RPS there against the base rate's 0.22383.
+
+| Predictor | Fixtures | RPS | Brier | Log loss | Accuracy |
+|---|---|---|---|---|---|
+| Market Line | 7,980 | 0.19362 | 0.5684 | 0.9582 | 0.5471 |
+| Ceiling Line | 2,660 | 0.19676 | 0.5717 | 0.9639 | 0.5498 |
+| **Elo** | **7,980** | **0.19943** | 0.5810 | 0.9771 | 0.5380 |
+| Naive Baseline | 7,980 | 0.22938 | 0.6430 | 1.0642 | 0.4556 |
+
+- Elo takes **0.0300** of the **0.0358** RPS the market takes out of the floor — 84% of the
+  available edge, from ratings and nothing else. It sits 0.0058 behind the market and 0.0008 above
+  the README's ≤0.1986 target, which is what issues #10 and #13 are for. An Elo that *beat* the
+  market would be evidence of a leak, and the corpus test says so.
+- **The draw curve.** Across ten Supremacy deciles Elo's predicted draw rate falls **30.2% → 14.5%**,
+  monotonically at every step, and the observed rate over its own buckets falls **27.6% → 13.8%**.
+  The design's 32.3% → 13.4% is the *observed* curve bucketed by **market** Supremacy, and it still
+  measures at 32.0% → 13.7%. Elo's most-even decile is a genuinely less even set of Fixtures than
+  the market's, which is why its top end is lower — the shape is reproduced, the endpoints are the
+  model's own.
+- **Elo quotes draws a little too often in every bucket** — the market *under*-quotes them at the
+  even end, 28.6% against 32.0% observed. Both are what issue #10's shared calibration layer is
+  for. Elo's is the frozen-hyperparameter drift ADR 0008 accepts by name: the band was fitted on
+  2001/02–2004/05 and the draw rate has moved since. Pinned by a test so it cannot be forgotten.
+- **Promoted Clubs arrive with ratings that differ**, in all 21 scored Seasons. For 2005/06:
+  Sunderland 1679.8 from 206 matches, Wigan 1623.9 from 230, West Ham 1565.6 from 206. Not one is
+  at the 1500 starting value.
+- **By the first scored Prediction Round the thinnest Premier League rating rests on 190 matches**
+  — five Burn-In Seasons of football. This is what closes open risk 4.
+
 ## Open risks
 
 1. **BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.
 2. **The live path is only half tested.** Re-checked 21 Aug 2026: `fixtures.csv` is reachable and parses, but it still holds a single English row (one E2 fixture) and no E0 rows, and `mmz4281/2627/E0.csv` still does not exist. The transport is proven; the E0 live path is not. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — the check that must pass before a live Prediction Round can be sealed.
 3. **MyFootballFacts parseability is unverified.** Content correctness was confirmed — a 2025/26 result cross-checked exactly against Football-Data — but the HTML has not been parsed across all nine season pages.
-4. **Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable. This sits inside the Burn-In Window so it should not reach scored results, but it is worth watching.
+4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.

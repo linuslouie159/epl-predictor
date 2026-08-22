@@ -27,7 +27,7 @@ import pandas as pd
 
 from epl.clubs import ClubResolver
 from epl.ingest.fetcher import Fetcher, default_fetcher
-from epl.paths import raw_dir
+from epl.paths import processed_dir, raw_dir
 from epl.windows import FIRST_SEASON, LAST_SEASON, season_label
 
 #: The four English tiers Football-Data serves with an identical schema (ADR 0004).
@@ -514,3 +514,25 @@ def _parse_season_dates(values: pd.Series, season: int, path: Path | str) -> pd.
         )
 
     return parsed.dt.date
+
+
+def match_table(path: Path | None = None) -> pd.DataFrame:
+    """The cleaned match table `python -m epl.ingest build` writes, or how to make one.
+
+    Every command that scores or fits anything starts here — the ledger's, the benchmarks' and the
+    models' — so the read and the instruction that follows a missing file are stated once. Three
+    copies of an eight-line helper is where one of them quietly starts reading `time` as a float
+    and stops resolving kickoffs.
+
+    Distinct from :func:`load_matches`, which builds the same table from the raw cache. This reads
+    what was already built, which is what a command wants: the corpus every Predictor was walked
+    over, rather than a fresh derivation of it.
+    """
+    source = path or processed_dir() / "matches.csv"
+    if not source.exists():
+        raise SystemExit(
+            f"{source} does not exist. Build it first:\n"
+            "    python -m epl.ingest fetch\n"
+            "    python -m epl.ingest build"
+        )
+    return pd.read_csv(source, dtype={"time": "string"})

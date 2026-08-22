@@ -14,7 +14,7 @@ import pytest
 
 from epl.ledger import __main__ as cli
 from epl.ledger import backtest, scoreboard
-from epl.paths import processed_dir
+from epl.paths import backtest_dir, processed_dir
 
 
 @pytest.fixture
@@ -63,8 +63,14 @@ class TestScoreboard:
         assert cli.main(["scoreboard"]) == 0
 
         board = pd.read_csv(scoreboard.path())
-        assert board["predictor"].tolist() == ["naive_baseline"]
-        assert board["fixtures"].tolist() == [3]
+        # Compared against the files the backfill left on disk, not against the rows the scoreboard
+        # was built from — those would be the same object twice and the assertion would hold
+        # whatever happened in between. Not against a list of names either: registering a Predictor
+        # is what puts it on the board (spec, user story 16), so naming them would assert the size
+        # of the registry rather than that the scoreboard scores its input.
+        written = {path.stem for path in backtest_dir().glob("*.csv")}
+        assert set(board["predictor"]) == written
+        assert board.loc[board["predictor"] == "naive_baseline", "fixtures"].tolist() == [3]
         assert "rps" in capsys.readouterr().out
 
 

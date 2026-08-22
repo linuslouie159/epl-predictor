@@ -19,14 +19,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from epl.ingest import match_table
 from epl.ledger import backtest, live, schema, scoreboard
-from epl.paths import processed_dir
 from epl.predictors import by_name, registered
 from epl.windows import EVALUATION_WINDOW
 
 #: Importing these is what puts Predictors on the scoreboard. Each later stage adds its own —
 #: ``epl.models`` at issue #9, ``epl.pundits`` at issue #11.
-PREDICTOR_PACKAGES: tuple[str, ...] = ("epl.benchmarks",)
+PREDICTOR_PACKAGES: tuple[str, ...] = ("epl.benchmarks", "epl.models")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _backfill(matches_path: Path | None, predictor: str | None) -> int:
-    matches = _load_matches(matches_path)
+    matches = match_table(matches_path)
     predictors = [by_name(predictor)] if predictor else list(registered())
     window = f"{min(EVALUATION_WINDOW)}-{max(EVALUATION_WINDOW)}"
 
@@ -82,7 +82,7 @@ def _backfill(matches_path: Path | None, predictor: str | None) -> int:
 
 
 def _scoreboard(matches_path: Path | None) -> int:
-    matches = _load_matches(matches_path)
+    matches = match_table(matches_path)
     rows = pd.concat([backtest.read(), live.read()], ignore_index=True)
     board = scoreboard.build(rows, matches)
     destination = scoreboard.write(board)
@@ -125,18 +125,6 @@ def _audit() -> int:
 
     print("both stores audit clean; nothing under outputs/live/ has been rewritten")
     return 0
-
-
-def _load_matches(path: Path | None) -> pd.DataFrame:
-    """The cleaned match table, or an instruction for how to make one."""
-    source = path or processed_dir() / "matches.csv"
-    if not source.exists():
-        raise SystemExit(
-            f"{source} does not exist. Build it first:\n"
-            "    python -m epl.ingest fetch\n"
-            "    python -m epl.ingest build"
-        )
-    return pd.read_csv(source, dtype={"time": "string"})
 
 
 if __name__ == "__main__":
