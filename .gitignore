@@ -38,3 +38,7 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# The scoreboard is derived from both stores by `python -m epl.ledger scoreboard` and is
+# regenerable, so it is code output rather than evidence (ADR 0005 again).
+outputs/scoreboard.csv

@@ -50,8 +50,26 @@ Design is complete and grilled.
 (`src/epl/metrics/`, issue #6) — RPS, Brier, log loss, accuracy and the 10-bin reliability diagram,
 every expected value worked by hand before any model uses it.
 
-The remaining five modules from the README layout exist as documented shells, each naming the issue
+**Stage 3 is built**: the Predictor contract (`src/epl/predictors.py`), the split ledger
+(`src/epl/ledger/`) and the Naive Baseline (`src/epl/benchmarks/naive.py`), issue #7 — one Predictor
+walked over the whole Evaluation Window, stored, audited and scored at **0.22938 RPS** over 7,980
+Fixtures and 952 Prediction Rounds.
+
+`epl.models`, `epl.pundits` and `epl.simulate` are still documented shells, each naming the issue
 that builds it.
+
+Three things about stage 3 worth knowing before building on it:
+
+- **A Predictor is handed `Evidence`, not an As-Of Instant.** Evidence is the corpus already cut at
+  the instant, and it records what it hands over, so `inputs_seen` and `latest_input` on every
+  stored row are a receipt. Do not add a Predictor that reads the corpus directly — that is the
+  one way a leak can enter without an audit failing.
+- **The scoreboard has no branch per Predictor and must not grow one.** Registering a Predictor is
+  what puts it on the board; the ledger, the audits and the scoring are written once against the
+  contract (spec, user story 16).
+- **The row audit is two-tier on kickoff**, matching the As-Of rule: strictly-before where a
+  kickoff time was recorded, and at-or-before where it was not. 313 Evaluation Window Fixtures are
+  played on the very Tuesday or Friday they anchor to and are legitimately equal.
 
 Two things about stage 2 worth knowing before building on it:
 
@@ -66,28 +84,31 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Issue #7 — split prediction ledger and the Naive Baseline scored end to end.** It is the only
-substantial ticket whose blockers are all closed, and everything else is behind it: #8, #9 and #11
-name it directly, and #10 and #12–#17 sit behind those.
+**Issue #8 — the Market Line and the Ceiling Line.** Closing #7 unblocked #8, #9 and #11 at once, so
+the graph no longer picks for you. Take #8 first: it is the smaller of the two modelling tickets, it
+is the opponent the whole project is measured against, and putting it on the board before Elo means
+the first real model has something meaningful beside it from its first run rather than only a floor.
+Both are Predictors registered against the contract stage 3 built, so neither needs anything new
+from the ledger.
 
-Take the tracker's dependency graph over the README's build order where they disagree, and they do
-disagree here. The README lists Elo third and never names the ledger as a stage, but #9 is blocked
-by #7 — the ledger ticket is the tracer bullet that puts one Predictor through the whole pipeline
-and out the other side scored, so that Elo, the benchmarks and the Pundits land on something that
-already works end to end. Check the graph before starting:
+**Issue #9 — pyramid-wide Elo** is equally unblocked and is what the README's build order lists
+first. Either is defensible; do not do both at once. Check the graph before starting:
 
 ```
 gh issue view <n> | sed -n '/## Blocked by/,$p'
 ```
 
 Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
-unblocked since stage 1, needs nothing from #7, and is small — pick it up when a stage lands and
-there is no appetite to start the next one.
+unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage lands
+and there is no appetite to start the next one.
 
 ```
 conda env create -f environment.yml
 conda activate epl-predictor
 python -m epl.ingest fetch     # fill data/raw/ — 104 files, 26 Seasons x 4 tiers
 python -m epl.ingest build     # write matches.csv (52,672) + odds_availability.csv
+python -m epl.ledger backfill  # walk every registered Predictor over the Evaluation Window
+python -m epl.ledger scoreboard
+python -m epl.ledger audit     # re-check both stores and the seal on outputs/live/
 pytest                         # add --run-network to also hit football-data.co.uk
 ```

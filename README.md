@@ -76,20 +76,22 @@ stub explaining what it would do and what it needs. API-Football is unnecessary 
 ## Layout
 
 ```
-data/raw/            cached downloads, byte-identical, never edited
-data/processed/      cleaned tables
-src/epl/windows.py   Season identity, Burn-In and Evaluation Windows
-src/epl/rounds.py    the As-Of Instant rule and Prediction Rounds
-src/epl/ingest/      football-data, pundit scrapers
-src/epl/clubs/       canonical Club table + Alias resolution
-src/epl/metrics/     RPS, Brier, log loss, calibration
-src/epl/models/      elo, ordered logit, dixon-coles, calibration layer
-src/epl/benchmarks/  market line (vig removal), naive baseline
-src/epl/pundits/     grading + Calibrated Pundit
-src/epl/simulate/    Bayesian fit + Monte Carlo Season Projection
-src/epl/ledger/      Prediction stores
-outputs/backtest/    regenerable, gitignored
-outputs/live/        SEALED, committed, append-only, never rewritten
+data/raw/               cached downloads, byte-identical, never edited
+data/processed/         cleaned tables
+src/epl/windows.py      Season identity, Burn-In and Evaluation Windows
+src/epl/rounds.py       the As-Of Instant rule and Prediction Rounds
+src/epl/predictors.py   the Predictor contract, the Evidence a Predictor sees, the registry
+src/epl/ingest/         football-data, pundit scrapers
+src/epl/clubs/          canonical Club table + Alias resolution
+src/epl/metrics/        RPS, Brier, log loss, calibration
+src/epl/models/         elo, ordered logit, dixon-coles, calibration layer
+src/epl/benchmarks/     market line (vig removal), naive baseline
+src/epl/pundits/        grading + Calibrated Pundit
+src/epl/simulate/       Bayesian fit + Monte Carlo Season Projection
+src/epl/ledger/         Prediction stores, the row audit, the scoreboard
+outputs/backtest/       regenerable, gitignored — one file per Predictor
+outputs/live/           SEALED, committed, append-only — one file per Prediction Round
+outputs/scoreboard.csv  every Predictor over the Evaluation Window; regenerable, gitignored
 ```
 
 ## Environment
@@ -182,3 +184,48 @@ pytest --run-network    # also hits football-data.co.uk
 Tests marked `cache` re-derive the measured facts in [docs/DECISIONS.md](./docs/DECISIONS.md) from
 the ingested corpus rather than trusting them, and skip when `data/raw/` is absent. Tests marked
 `network` check that upstream still serves the shapes the live loop assumes.
+
+## Predictions, the ledger and the scoreboard
+
+A **Predictor** is anything with a name and a `predict`. It is handed one Prediction Round's
+Fixtures and the **Evidence** visible at that round's As-Of Instant, and returns one probability
+distribution per Fixture:
+
+```python
+from epl.predictors import Evidence, register
+
+class MyModel:
+    name = "my_model"
+
+    def predict(self, fixtures, evidence):
+        seen = evidence.matches(divisions=("E0",))   # everything already played, and nothing else
+        ...                                          # -> an (n, 3) array over (Home, Draw, Away)
+
+MY_MODEL = register(MyModel())
+```
+
+Evidence is the corpus already cut at the instant, rather than the instant with an invitation to go
+and read — a Predictor cannot reach a row it should not have. It also records what it handed over,
+so every stored Prediction carries `inputs_seen` and `latest_input`, and the audit can re-check the
+project's one rule off the file months later.
+
+`fixtures` is guarded the same way and for the same reason. A Fixture "carries no result until it is
+played", so `predict` sees only `schema.VISIBLE_FIXTURE_COLUMNS` — who is playing, when, and the
+Market Line the Fixture was priced at. The corpus is a table of *played* matches, and handing over
+the rest of the row would deliver the answer sheet in the same call as the question.
+
+```
+python -m epl.ledger backfill      # walk every registered Predictor over the Evaluation Window
+python -m epl.ledger scoreboard    # score both stores; write outputs/scoreboard.csv
+python -m epl.ledger audit         # re-check every stored row, and the seal on outputs/live/
+```
+
+Both stores share one row schema, so scoring never knows which it is reading. `audit` is the one to
+run in anger: rows are checked on the way *into* both stores, so it only ever fails on a file that
+changed after it was written — including any file under `outputs/live/` whose git history shows a
+commit at or after its round's first kickoff.
+
+The Naive Baseline is the floor, and it is fitted walk-forward: at each round it counts only the
+Outcomes its Evidence holds. It scores **0.22938 RPS** over the Evaluation Window's 7,980 Fixtures.
+The published 0.2292 is the whole-window figure, computed from rates that already know how the
+window turned out; the 0.0002 difference is the leak being refused, not a bug.

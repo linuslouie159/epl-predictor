@@ -159,6 +159,60 @@ lands at or before the start of the kickoff day, which, since no fixture in the 
 midnight, still gives strictness. `tests/test_rounds.py` pins that count at exactly 437 so the
 carve-out cannot quietly grow, and asserts the strict form over the other 9,443.
 
+## The Prediction ledger
+
+Added at stage 3 (issue #7), which put one Predictor through the whole pipeline and out the other
+side scored.
+
+- **A Predictor is handed Evidence, not an As-Of Instant.** The contract could have been "here is
+  the instant, go and read what you need". It is not, because that would put the project's one rule
+  in as many places as there are Predictors. `epl.predictors.Evidence` is the corpus already cut at
+  the instant, and it *records what it handed over*, so `inputs_seen` and `latest_input` on every
+  stored row are a receipt rather than an assertion.
+- **A Predictor is handed a Fixture, not the match row it was drawn from.** `Evidence` guards the
+  corpus; this guards the *other* argument. The corpus is a table of played matches, so the row a
+  Fixture comes from also carries the Outcome, the goals and the match statistics — and a Predictor
+  handed that row could score perfectly with every stored row still auditing clean, because nothing
+  about it would be inconsistent. `schema.VISIBLE_FIXTURE_COLUMNS` is an allow-list, not a
+  deny-list: a column nobody has thought about is excluded rather than included. The pre-match odds
+  are on it (sampled at the As-Of Instant itself, ADR 0001); the closing odds are not.
+- **The seal check reads git for what is *missing*, too.** A check that walks the working tree
+  cannot report its own deletions — once a sealed file is gone there is nothing left to notice, and
+  deleting a round is the most destructive rewrite available. Git still holds the record, so
+  `live.seal_violations` asks git which rounds were ever sealed and complains about any that are no
+  longer on disk. Append-only means nothing leaves either.
+- **A match row is timestamped at its kickoff**, not at full time. Full time is when its result
+  became knowable, so kickoff is the loose direction in principle. Every As-Of Instant is a
+  midnight and the latest kickoff anywhere in the corpus is **20:15**, so no match is in progress
+  when one falls, and the two can never land on opposite sides of an instant.
+  `tests/ledger/test_the_corpus.py` re-derives that from the data.
+- **The ledger stores no Outcome.** A Prediction is sealed before kickoff, so it cannot know one;
+  the scoreboard joins to the match table on the Club pairing within a Season and tier. Not on the
+  date, so a postponed Fixture is still the Fixture that was predicted.
+- **The audit is two-tier on kickoff, exactly as the As-Of rule is.** A Prediction whose kickoff
+  time is recorded must be made strictly before it; one whose kickoff time is not recorded sits at
+  midnight on its own day, and 313 of the Evaluation Window's Fixtures are played on the very
+  Tuesday or Friday they anchor to. Equality is allowed there and nowhere else.
+- **`outputs/scoreboard.csv` sits beside the two stores, not inside one.** It summarises both, so
+  it belongs to neither — and a store must never pick up a report while globbing its own files.
+  Gitignored, being derived and regenerable.
+
+### Measured at stage 3 (21 Aug 2026)
+
+Re-derived on every run by `tests/ledger/test_the_corpus.py`, which skips when `data/raw/` is absent.
+
+- The Naive Baseline scores **0.22938 RPS** over the Evaluation Window — 7,980 Fixtures across 952
+  Prediction Rounds — with Brier 0.6430, log loss 1.0642 and accuracy 0.4556.
+- The published **0.2292** is the *whole-window* figure, computed from rates that already know how
+  the window turned out. Estimating them walk-forward costs **0.0002 RPS**. That difference is the
+  leak being refused, not a bug — and it is in the expected direction, since a floor that knew the
+  future would be a slightly better floor and would make every Predictor measured against it look
+  slightly worse than it is.
+- The first scored Prediction sees exactly **1,900** Premier League matches: the five Burn-In
+  Seasons, warmed up and never scored.
+- The Naive Baseline's top pick is a Home win at every one of the 952 rounds, so its accuracy is
+  just the Home-win rate. Which is why accuracy is never the headline.
+
 ## Open risks
 
 1. **BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.

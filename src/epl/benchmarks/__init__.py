@@ -1,6 +1,6 @@
 """Benchmarks: the Market Line, the Ceiling Line and the Naive Baseline.
 
-Built by issue #8.
+The Naive Baseline is built (issue #7, `naive.py`). The two market lines arrive at issue #8.
 
 The **Market Line** is the opponent: vig-removed implied probabilities from the market-average
 *pre-match* odds, scoring ~0.1936 RPS. Pre-match rather than closing, against convention, because
@@ -24,4 +24,6 @@ Which Seasons carry a market at all is recorded by the ingest, not re-derived he
 `epl.ingest.season_coverage`.
 """
 
-__all__: list[str] = []
+from epl.benchmarks.naive import NAIVE_BASELINE, UNINFORMED, NaiveBaseline
+
+__all__ = ["NAIVE_BASELINE", "UNINFORMED", "NaiveBaseline"]

@@ -1,6 +1,7 @@
-"""Ledger: the two Prediction stores.
+"""Ledger: the two Prediction stores, the row audit and the scoreboard over them.
 
-Built by issue #7.
+Built at stage 3 (issue #7). `schema` holds the one row schema and its audits, `backtest` the
+regenerable store, `live` the sealed one, and `scoreboard` the scoring over both.
 
 Two stores for one kind of record looks like duplication, so the reason is worth restating here
 (ADR 0005). A Backtest Prediction is reproducible — rerun the pipeline and it comes back identical —
@@ -28,4 +29,30 @@ never editing history. The ingest already applies that same rule to the bytes a 
 from — see `epl.ingest.superseded_dir`.
 """
 
-__all__: list[str] = []
+from epl.ledger import backtest, live, schema, scoreboard
+from epl.ledger.schema import (
+    DTYPES,
+    FIXTURE_KEY,
+    LEDGER_COLUMNS,
+    LedgerError,
+    audit,
+    check,
+    predictions_for,
+)
+from epl.ledger.scoreboard import SCOREBOARD_COLUMNS, scored_predictions
+
+__all__ = [
+    "DTYPES",
+    "FIXTURE_KEY",
+    "LEDGER_COLUMNS",
+    "SCOREBOARD_COLUMNS",
+    "LedgerError",
+    "audit",
+    "backtest",
+    "check",
+    "live",
+    "predictions_for",
+    "schema",
+    "scoreboard",
+    "scored_predictions",
+]

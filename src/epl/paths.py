@@ -35,11 +35,16 @@ def processed_dir() -> Path:
     return project_root() / "data" / "processed"
 
 
+def outputs_dir() -> Path:
+    """Everything the pipeline publishes: the two Prediction stores and the reports over them."""
+    return project_root() / "outputs"
+
+
 def backtest_dir() -> Path:
     """Regenerable Backtest Predictions. Deletable at will (ADR 0005)."""
-    return project_root() / "outputs" / "backtest"
+    return outputs_dir() / "backtest"
 
 
 def live_dir() -> Path:
     """Sealed Predictions. Append-only, committed, never rewritten (ADR 0005)."""
-    return project_root() / "outputs" / "live"
+    return outputs_dir() / "live"

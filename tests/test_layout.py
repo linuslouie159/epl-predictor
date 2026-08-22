@@ -23,14 +23,16 @@ MODULES = (
     "epl.ledger",
 )
 
-#: Single-file modules that every stage imports rather than a stage of their own: two scope which
+#: Single-file modules that every stage imports rather than a stage of their own: three scope which
 #: data a Prediction may see, one owns the on-disk layout. Ticket 5 puts Prediction Rounds here,
-#: beside the Windows.
-FOUNDATIONS = ("epl.windows", "epl.rounds", "epl.paths")
+#: beside the Windows; ticket 7 puts the Predictor contract here for the same reason — every stage
+#: from Elo onward implements it, and it belongs inside none of them.
+FOUNDATIONS = ("epl.windows", "epl.rounds", "epl.paths", "epl.predictors")
 
 #: The modules that are still documented shells. Each is removed from here as its stage is built:
-#: ingest and clubs by tickets 2-4, metrics by ticket 6.
-UNBUILT = MODULES[3:]
+#: ingest and clubs by tickets 2-4, metrics by ticket 6, the ledger and the Naive Baseline half of
+#: benchmarks by ticket 7 — the Market Line joins the latter at ticket 8.
+UNBUILT = ("epl.models", "epl.pundits", "epl.simulate")
 
 
 @pytest.mark.parametrize("name", MODULES)
