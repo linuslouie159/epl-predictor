@@ -23,6 +23,7 @@ import itertools
 import pandas as pd
 import pytest
 
+from epl.benchmarks import MARKET_LINE
 from epl.ingest import DIVISIONS, FIRST_SEASON, LAST_SEASON, load_matches, raw_season_path
 from epl.ledger import backtest, scoreboard
 from epl.models import ELO, burn_in, draw_curve
@@ -77,6 +78,19 @@ def scored(matches: pd.DataFrame) -> pd.DataFrame:
     """Elo walked over the whole Evaluation Window, with the Outcome that followed each call."""
     rows = backtest.backfill(ELO, matches)
     return scoreboard.scored_predictions(rows, matches)
+
+
+@pytest.fixture(scope="module")
+def market_curve(matches: pd.DataFrame) -> pd.DataFrame:
+    """The Market Line's draw curve over the same 7,980 Fixtures, cut the same way.
+
+    Elo's numbers only mean anything beside something, and the something issue #9 names is the
+    design's 32.3% -> 13.4%. Deriving the market's curve here rather than quoting it is what turns
+    "that figure came from the market's ordering" from a claim into a measurement.
+    """
+    rows = backtest.backfill(MARKET_LINE, matches)
+    scored = scoreboard.scored_predictions(rows, matches)
+    return _curve(scored)
 
 
 @pytest.fixture(scope="module")
@@ -159,6 +173,47 @@ class TestTheDrawBandOverTheCorpus:
         curve = _curve(scored)
 
         assert (curve["predicted_draw"] > curve["observed_draw"]).all()
+
+    def test_the_design_figure_is_the_market_ordering_and_not_a_models(
+        self, market_curve: pd.DataFrame
+    ) -> None:
+        """The claim the whole reading of issue #9's fourth criterion rests on, measured.
+
+        The criterion asks for "the measured range of 32.3% for evenly matched Clubs down to 13.4%
+        at the widest mismatch". Nothing in the design says which Supremacy those buckets were cut
+        by — and at design time there was no model, so the only one available was the market's.
+        Bucketing the *observed* draw rate by the Market Line's Supremacy reproduces the design
+        figure to within a few tenths of a point, which is what makes that reading the right one.
+
+        Without this the reading is an assertion in a docstring, and the criterion could be waved
+        through on a story rather than on a number. docs/DECISIONS.md states it; this derives it.
+        """
+        observed = market_curve["observed_draw"]
+
+        assert observed.iloc[0] == pytest.approx(DESIGN_DRAW_AT_EVEN, abs=0.005)
+        assert observed.iloc[-1] == pytest.approx(DESIGN_DRAW_AT_WIDEST, abs=0.005)
+
+    def test_a_noisier_supremacy_is_what_costs_elo_the_top_of_the_range(
+        self, scored: pd.DataFrame, market_curve: pd.DataFrame
+    ) -> None:
+        """The mechanism behind the shortfall, rather than the fact of it.
+
+        Both orderings are cut into ten equal buckets over the same 7,980 Fixtures, so the only
+        difference is *which* Fixtures land in the most-even one. The market sorts them more
+        sharply, so its closest bucket is genuinely closer and draws more often; Elo's is a blunter
+        cut of the same corpus and draws less often. That is a property of the ordering, not of the
+        draw band — which is why widening the band would not close the gap, and would only make
+        Elo quote draws it already over-quotes.
+        """
+        elo_even = _curve(scored)["observed_draw"].iloc[0]
+        market_even = market_curve["observed_draw"].iloc[0]
+
+        assert elo_even < market_even
+        # The far end is a much easier ordering problem — both know a mismatch when they see one —
+        # so the two agree there, and the gap is specific to the even end.
+        assert _curve(scored)["observed_draw"].iloc[-1] == pytest.approx(
+            market_curve["observed_draw"].iloc[-1], abs=0.02
+        )
 
 
 class TestTheRatingsThemselves:
