@@ -88,8 +88,19 @@ Two things about stage 2 worth knowing before building on it:
 the graph no longer picks for you. Take #8 first: it is the smaller of the two modelling tickets, it
 is the opponent the whole project is measured against, and putting it on the board before Elo means
 the first real model has something meaningful beside it from its first run rather than only a floor.
-Both are Predictors registered against the contract stage 3 built, so neither needs anything new
-from the ledger.
+Both are Predictors registered against the contract stage 3 built. Two things about that contract
+will come up in #8's first hour:
+
+- **The Ceiling Line needs a decision the ledger deliberately does not make for it.** A Predictor
+  sees `schema.VISIBLE_FIXTURE_COLUMNS`, and the closing odds are **not** on that list — they carry
+  team news from after the As-Of Instant, so exposing them to every Predictor would be the leak the
+  allow-list exists to prevent. The Ceiling Line is the one Predictor entitled to them, and it is a
+  labelled exception rather than an oversight (ADR 0001). Decide explicitly how it gets them; do
+  not just append them to the list.
+- **The Market Line reads its odds off the Fixture, not off `Evidence`**, so its rows will record
+  `inputs_seen = 0` and an empty `latest_input`. That is correct and audits clean — a Predictor
+  that consumes no history has no history to leak, the same way a Pundit will. Do not "fix" it by
+  making it touch the corpus.
 
 **Issue #9 — pyramid-wide Elo** is equally unblocked and is what the README's build order lists
 first. Either is defensible; do not do both at once. Check the graph before starting:
