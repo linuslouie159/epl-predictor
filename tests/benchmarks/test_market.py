@@ -19,7 +19,7 @@ import pandas as pd
 import pytest
 
 from epl import predictors
-from epl.benchmarks import CEILING_LINE, MARKET_LINE, market, vig
+from epl.benchmarks import CEILING_LINE, CLOSING_COLUMNS, MARKET_LINE, market, vig
 from epl.benchmarks.market import OddsLine
 from epl.ledger import backtest, schema
 from epl.predictors import Evidence
@@ -123,6 +123,12 @@ class TestTheCeilingLine:
 
         assert predicted[0] == pytest.approx(vig.shin([[1.74, 3.70, 4.75]])[0])
 
+    def test_its_claim_matches_what_the_ledger_grants(self) -> None:
+        """`CLOSING_COLUMNS` is spelled out in the benchmarks rather than imported from the ledger,
+        so that the claim is an independent statement the ledger genuinely checks rather than the
+        ledger checking its own tuple against itself. This is what keeps the two in step."""
+        assert CLOSING_COLUMNS == schema.PRIVILEGED_FIXTURE_COLUMNS
+
     def test_it_claims_the_closing_odds_by_name(self) -> None:
         """The labelled exception. The closing odds are absent from the ledger's allow-list
         because they carry team news from after the As-Of Instant; the Ceiling Line is the one
@@ -167,8 +173,14 @@ class TestTheCeilingLine:
         assert "team news" in caveat
         assert "2019/20" in caveat
 
-    def test_the_market_line_needs_no_caveat(self) -> None:
-        assert predictors.note(MARKET_LINE) == ""
+    def test_the_market_lines_note_points_at_its_own_audit_instead(self) -> None:
+        """It needs no caveat about what it knows — its information set is the honest one. What it
+        does carry is a pointer to the margin behind the number, because a vig-removed line is a
+        derived Prediction and issue #8 asks that the removal be checkable rather than trusted."""
+        caveat = predictors.note(MARKET_LINE)
+
+        assert "team news" not in caveat
+        assert "overround" in caveat
 
 
 class TestASeasonWithNoMarket:

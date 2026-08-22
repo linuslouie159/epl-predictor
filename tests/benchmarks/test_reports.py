@@ -59,6 +59,15 @@ class TestTheOverroundReport:
         market = written.loc[written["predictor"] == "market_line"]
         assert market["mean_overround"].tolist() == pytest.approx([1.05556] * 3, abs=1e-5)
 
+    def test_the_ceiling_line_is_labelled_in_the_report_too(self, corpus: Path) -> None:
+        """"Labelled everywhere it appears" (issue #8) includes here. A bare row beside the Market
+        Line's would invite the same wrong reading the scoreboard's note exists to prevent."""
+        cli.main(["overround"])
+
+        written = pd.read_csv(cli.path())
+        ceiling = written.loc[written["predictor"] == "ceiling_line"]
+        assert all("team news" in note for note in ceiling["note"])
+
     def test_the_ceiling_line_is_reported_only_where_it_has_a_book(self, corpus: Path) -> None:
         cli.main(["overround"])
 
@@ -89,7 +98,7 @@ class TestTheOverroundReport:
 
 class TestComparingTheMethods:
     def test_it_prints_all_three_and_names_the_default(
-        self, capsys: pytest.CaptureFixture[str]
+        self, corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         assert cli.main(["methods"]) == 0
 
@@ -98,9 +107,25 @@ class TestComparingTheMethods:
         assert "shin" in printed.split("(default)")[0].splitlines()[-1]
 
     def test_it_shows_the_book_it_is_working_from(
-        self, capsys: pytest.CaptureFixture[str]
+        self, corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Otherwise three columns of six-figure numbers say nothing a reader can check."""
         cli.main(["methods"])
 
         assert "1.05556" in capsys.readouterr().out
+
+    def test_it_rescores_the_window_under_each_method(
+        self, corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The acceptance criterion: "so a reader can see for themselves that the choice barely
+        matters for benchmarking". Seeing it means re-scoring the corpus, not reading a docstring
+        — so the RPS figures and the spread between them have to come out of a command."""
+        cli.main(["methods"])
+
+        printed = capsys.readouterr().out
+        assert "RPS" in printed
+        assert "spread:" in printed
+
+    def test_the_window_scoring_needs_a_corpus(self, project_root: Path) -> None:
+        with pytest.raises(SystemExit, match=r"epl\.ingest build"):
+            cli.main(["methods"])

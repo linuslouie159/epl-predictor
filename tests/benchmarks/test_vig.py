@@ -269,3 +269,46 @@ class TestAskingWhetherSomethingIsABook:
 
     def test_an_empty_slate_answers_emptily(self) -> None:
         assert vig.is_book(np.empty((0, 3))).tolist() == []
+
+
+class TestTheSolversBracket:
+    """The solver is handed a bracket and told the residual rises through it. Both are checked.
+
+    Bisection cannot tell "no root here" from "root at the edge": it just keeps halving and hands
+    back a bracket end. Every wrong answer that produces would still be a number between 0 and 1,
+    and would still sum to one after renormalisation — so it would reach the scoreboard looking
+    exactly like a Prediction. Checking the bracket once, up front, is what turns that into a
+    raise.
+    """
+
+    def test_both_solvers_find_a_root_strictly_inside_their_bracket(self) -> None:
+        """If either root sat at an end, the bracket would be wrong even though the numbers came
+        back. Shin's z is 0.0279 in (0, 1); power's exponent is 1.056 in (0, 100)."""
+        z = float(vig.shin_z([TYPICAL])[0])
+        assert 0.0 < z < 1.0
+
+        raw = 1.0 / np.asarray(TYPICAL)
+        exponent = float(np.log(vig.power([TYPICAL])[0][0]) / np.log(raw[0]))
+        assert 0.0 < exponent < vig.MAX_EXPONENT
+
+    def test_a_residual_pointing_the_wrong_way_is_refused(self) -> None:
+        """The trap the docstring on `_bisect` exists to spring. A decreasing residual walks the
+        interval away from its root and returns an end without complaining, so the check has to
+        catch it rather than the caller noticing a strange number later."""
+        with pytest.raises(vig.VigError, match="does not contain a root"):
+            vig._bisect(lambda x: -x, np.array([1.0]), np.array([2.0]))
+
+    def test_a_bracket_that_misses_the_root_is_refused(self) -> None:
+        with pytest.raises(vig.VigError, match="does not contain a root"):
+            vig._bisect(lambda x: x - 10.0, np.array([0.0]), np.array([1.0]))
+
+    def test_a_correct_bracket_is_accepted(self) -> None:
+        """x - 1.5 crosses zero at 1.5, inside [0, 3]."""
+        found = vig._bisect(lambda x: x - 1.5, np.array([0.0]), np.array([3.0]))
+
+        assert float(found[0]) == pytest.approx(1.5)
+
+    def test_a_fair_book_sits_exactly_on_its_bracket_end_and_is_allowed(self) -> None:
+        """Shin's z is 0 for a book with no margin, which is the low end of its own bracket. The
+        check tolerates that, or every fair book would raise."""
+        assert vig.shin_z([FAIR]) == pytest.approx([0.0], abs=1e-9)

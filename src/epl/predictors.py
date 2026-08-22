@@ -173,27 +173,27 @@ class Predictor(Protocol):
         ...
 
 
-#: Three attributes a Predictor **may** declare. They are read through the accessors below rather
-#: than named on :class:`Predictor`, because a Protocol member is required of everything that
-#: claims the Protocol — adding them there would mean every Predictor, and every test double,
-#: had to carry three attributes that almost all of them have no use for.
-#:
-#: ``covers(fixtures) -> Sequence[bool]``
-#:     Which Fixtures this Predictor has anything to say about. Declared by the Predictors whose
-#:     input does not span the whole Evaluation Window — the Ceiling Line, whose closing odds
-#:     begin in 2019/20, and a Pundit, who published in the Seasons they worked (issue #11).
-#:     Absent means it covers everything. See :func:`epl.ledger.schema.covered`.
-#:
-#: ``also_sees: tuple[str, ...]``
-#:     Fixture columns this Predictor claims beyond the ledger's allow-list. Only the columns in
-#:     :data:`epl.ledger.schema.PRIVILEGED_FIXTURE_COLUMNS` may be claimed, and today only the
-#:     Ceiling Line claims any (ADR 0001).
-#:
-#: ``note: str``
-#:     A caveat that must travel with this Predictor's score wherever it is reported. The Ceiling
-#:     Line carries one, because a scoreboard line that did not say it knows team news the model
-#:     cannot have would be a misleading number rather than an incomplete one.
-OPTIONAL_ATTRIBUTES: tuple[str, ...] = ("covers", "also_sees", "note")
+# Three attributes a Predictor **may** declare. They are read through the accessors below and
+# through :func:`epl.ledger.schema.covered` rather than named on :class:`Predictor`, because a
+# Protocol member is required of everything that claims the Protocol — adding them there would
+# mean every Predictor, and every test double, had to carry three attributes that almost all of
+# them have no use for.
+#
+# ``covers(fixtures) -> Sequence[bool]``
+#     Which Fixtures this Predictor has anything to say about. Declared by the Predictors whose
+#     input does not span the whole Evaluation Window — the Ceiling Line, whose closing odds
+#     begin in 2019/20, and a Pundit, who published in the Seasons they worked (issue #11).
+#     Absent means it covers everything. See :func:`epl.ledger.schema.covered`.
+#
+# ``also_sees: tuple[str, ...]``
+#     Fixture columns this Predictor claims beyond the ledger's allow-list. Only the columns in
+#     :data:`epl.ledger.schema.PRIVILEGED_FIXTURE_COLUMNS` may be claimed, and today only the
+#     Ceiling Line claims any (ADR 0001).
+#
+# ``note: str``
+#     A caveat that must travel with this Predictor's score wherever it is reported. The Ceiling
+#     Line carries one, because a scoreboard line that did not say it knows team news the model
+#     cannot have would be a misleading number rather than an incomplete one.
 
 
 def also_sees(predictor: Predictor) -> tuple[str, ...]:

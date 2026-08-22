@@ -47,10 +47,18 @@ DEFAULT_METHOD = "shin"
 FAIR_BOOK_TOLERANCE = 1e-9
 
 #: Bisection steps used to solve for the power exponent and for Shin's insider share. Both roots
-#: are bracketed and both functions are monotone, so this is the interval halved 80 times — far
-#: past the point where a float can tell two candidates apart. Fixed rather than convergence-based
-#: so that a rebuilt `outputs/backtest/` file is byte-identical to the last one (ADR 0005).
+#: are bracketed and both residuals are monotone, so this is the interval halved 80 times — which
+#: takes a bracket of width 100 to 1e-22, far past the point where a float can tell two candidates
+#: apart. A fixed count rather than a tolerance because there is no tolerance worth choosing at
+#: that width, and because a per-row convergence test would make the work each book costs depend
+#: on the book. (It is not what makes the result reproducible: bisection to a tolerance would be
+#: just as deterministic. What ADR 0005 needs is that the same odds give the same probabilities,
+#: and both forms do that.)
 BISECTION_STEPS = 80
+
+#: How far a residual may sit the wrong side of zero at a bracket end before the bracket is called
+#: wrong. A fair book puts Shin's root exactly at z = 0, so the check has to tolerate float dust.
+BRACKET_TOLERANCE = 1e-9
 
 #: The largest exponent :func:`power` will consider. A book needing more than this is not a book.
 MAX_EXPONENT = 100.0
@@ -79,6 +87,21 @@ def shaped(odds: object) -> npt.NDArray[np.float64]:
     return array
 
 
+def array_overround(book: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """The overround of already-shaped odds, which is the sum of their implied probabilities.
+
+    Takes an array rather than anything array-like, so that :func:`_faults` — which is *deciding*
+    whether these odds are a book — can measure the overround without first requiring them to be
+    one. :func:`overround` is the public form and validates.
+    """
+    return np.asarray((1.0 / book).sum(axis=1), dtype=np.float64)
+
+
+def _raw(odds: object) -> npt.NDArray[np.float64]:
+    """A validated book's implied probabilities, ``1/odds``. What all three methods start from."""
+    return 1.0 / as_book(odds)
+
+
 def _faults(array: npt.NDArray[np.float64]) -> dict[str, npt.NDArray[np.bool_]]:
     """Every way a row can fail to be a book, as a mask per reason.
 
@@ -88,7 +111,7 @@ def _faults(array: npt.NDArray[np.float64]) -> dict[str, npt.NDArray[np.bool_]]:
     nobody meant to walk over.
     """
     with np.errstate(divide="ignore", invalid="ignore"):
-        book = (1.0 / array).sum(axis=1)
+        book = array_overround(array)
     return {
         "missing": np.isnan(array).any(axis=1),
         "impossible": ~(array > 1.0).all(axis=1) & ~np.isnan(array).any(axis=1),
@@ -148,11 +171,6 @@ def as_book(odds: object) -> npt.NDArray[np.float64]:
     return array
 
 
-def array_overround(book: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-    """The overround of already-shaped odds. Split out so the checks above can use it too."""
-    return np.asarray((1.0 / book).sum(axis=1), dtype=np.float64)
-
-
 def overround(odds: object) -> npt.NDArray[np.float64]:
     """The sum of a book's raw implied probabilities — one number per book.
 
@@ -170,8 +188,7 @@ def normalise(odds: object) -> npt.NDArray[np.float64]:
     defining property is that the ratio between any two prices survives untouched; its weakness is
     that this assumes the margin sits evenly on all three, which favourite-longshot bias denies.
     """
-    raw = 1.0 / as_book(odds)
-    return _renormalised(raw)
+    return _renormalised(_raw(odds))
 
 
 def power(odds: object) -> npt.NDArray[np.float64]:
@@ -184,8 +201,7 @@ def power(odds: object) -> npt.NDArray[np.float64]:
     probabilities proportionally harder than large ones — which is the favourite-longshot
     correction, arrived at without any account of why the bias exists.
     """
-    book = as_book(odds)
-    raw = 1.0 / book
+    raw = _raw(odds)
     exponent = _bisect(
         lambda k: 1.0 - (raw ** k[:, None]).sum(axis=1),
         np.zeros(len(raw)),
@@ -201,13 +217,7 @@ def shin_z(odds: object) -> npt.NDArray[np.float64]:
     is zero for a fair book and rises with the margin, and a z pinned at its bracket would mean the
     solver had failed rather than that the market was unusually exposed.
     """
-    book = as_book(odds)
-    raw = 1.0 / book
-    return _bisect(
-        lambda z: 1.0 - _shin_probabilities(raw, z).sum(axis=1),
-        np.zeros(len(raw)),
-        np.full(len(raw), 1.0 - 1e-9),
-    )
+    return _insider_share(_raw(odds))
 
 
 def shin(odds: object) -> npt.NDArray[np.float64]:
@@ -224,9 +234,25 @@ def shin(odds: object) -> npt.NDArray[np.float64]:
     bias from a stated mechanism rather than from a free parameter, while landing between the other
     two rather than at an extreme.
     """
-    book = as_book(odds)
-    raw = 1.0 / book
-    return _renormalised(_shin_probabilities(raw, shin_z(book)))
+    raw = _raw(odds)
+    return _renormalised(_shin_probabilities(raw, _insider_share(raw)))
+
+
+def _insider_share(raw: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Solve for the z that makes Shin's inverse sum to one, from already-validated raw prices.
+
+    Split from :func:`shin_z` so that :func:`shin` can validate the book once rather than twice —
+    the public form exists to be *asked*, this one to be *used*.
+
+    The bracket is [0, 1): at z = 0 the inverse sums to the square root of the overround, which is
+    at least one, and it falls monotonically from there. The upper end stops just short of one,
+    where the 1/(1 - z) in the inverse would divide by zero.
+    """
+    return _bisect(
+        lambda z: 1.0 - _shin_probabilities(raw, z).sum(axis=1),
+        np.zeros(len(raw)),
+        np.full(len(raw), 1.0 - BRACKET_TOLERANCE),
+    )
 
 
 def _shin_probabilities(
@@ -257,18 +283,42 @@ def _bisect(
     low: npt.NDArray[np.float64],
     high: npt.NDArray[np.float64],
 ) -> npt.NDArray[np.float64]:
-    """Halve ``[low, high]`` until it closes on the root of a decreasing ``residual``, per book.
+    """Halve ``[low, high]`` until it closes on the root of an **increasing** ``residual``.
 
-    Vectorised over books and run for a fixed number of steps rather than to a tolerance, so the
-    answer depends on the odds alone and never on how quickly a particular book converged.
+    Increasing, not decreasing: both callers pass ``1 - sum(...)`` of a quantity that falls as the
+    parameter rises, so the residual climbs through zero. That is the direction the step below
+    assumes — a positive residual means the root is *below* the midpoint — and handing this a
+    decreasing residual would walk the interval away from the root and return a bracket end
+    without complaining. Hence the bracket check: it is cheap, it runs once, and it turns that
+    silent wrong answer into a raise.
+
+    Vectorised over books, one root each.
     """
     low, high = np.asarray(low, dtype=np.float64).copy(), np.asarray(high, dtype=np.float64).copy()
+    _check_brackets(residual, low, high)
     for _ in range(BISECTION_STEPS):
         middle = 0.5 * (low + high)
         overshot = residual(middle) > 0
         high = np.where(overshot, middle, high)
         low = np.where(overshot, low, middle)
     return 0.5 * (low + high)
+
+
+def _check_brackets(
+    residual: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]],
+    low: npt.NDArray[np.float64],
+    high: npt.NDArray[np.float64],
+) -> None:
+    """Refuse a bracket the root is not inside, or a residual pointing the wrong way."""
+    below, above = residual(low), residual(high)
+    unbracketed = (below > BRACKET_TOLERANCE) | (above < -BRACKET_TOLERANCE)
+    if unbracketed.any():
+        row = int(np.argmax(unbracketed))
+        raise VigError(
+            f"row {row}: the solver's bracket does not contain a root — the residual runs from "
+            f"{float(below[row]):+.6f} at {float(low[row]):.6f} to {float(above[row]):+.6f} at "
+            f"{float(high[row]):.6f}, and an increasing residual must cross zero between them"
+        )
 
 
 #: Every vig removal method, by name. The Market Line reads this rather than naming a function, so

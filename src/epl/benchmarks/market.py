@@ -2,7 +2,7 @@
 
 The **Market Line** is the opponent this project is measured against: the vig-removed
 market-average *pre-match* book, `BbAv*` spliced to `Avg*`, one continuous series from 2005/06
-(CONTEXT.md). It scores ~0.1936 RPS over the Evaluation Window.
+(ADR 0001; CONTEXT.md defines the term). It scores ~0.1936 RPS over the Evaluation Window.
 
 The **Ceiling Line** is the identical treatment of the market-average *closing* book, available
 from 2019/20. A reference upper bound, never the headline opponent, because it knows team news the
@@ -41,7 +41,6 @@ import numpy.typing as npt
 import pandas as pd
 
 from epl.benchmarks import vig
-from epl.ledger.schema import PRIVILEGED_FIXTURE_COLUMNS
 from epl.predictors import Evidence, register
 from epl.windows import season_label
 
@@ -55,9 +54,19 @@ PREMATCH_COLUMNS: tuple[str, ...] = (
     "prematch_odds_away",
 )
 
-#: The market-average closing book, 2019/20 onward. The same three columns the ledger names as
-#: privileged, so the Ceiling Line's claim and the ledger's grant cannot drift apart.
-CLOSING_COLUMNS: tuple[str, ...] = PRIVILEGED_FIXTURE_COLUMNS
+#: The market-average closing book, 2019/20 onward — the Ceiling Line's input, and the one thing
+#: the ledger's allow-list withholds from every other Predictor.
+#:
+#: Spelled out rather than aliased to `epl.ledger.schema.PRIVILEGED_FIXTURE_COLUMNS`. Importing
+#: that tuple would make the Ceiling Line's claim and the ledger's check the same object, so the
+#: check would pass by construction and prove nothing about the only Predictor that makes a claim.
+#: Written out, the claim is an independent statement the ledger genuinely tests — and
+#: `tests/benchmarks/test_market.py` asserts the two lists still match.
+CLOSING_COLUMNS: tuple[str, ...] = (
+    "closing_odds_home",
+    "closing_odds_draw",
+    "closing_odds_away",
+)
 
 
 class MarketError(Exception):
@@ -158,14 +167,24 @@ class OddsLine:
         actionable rather than a count."""
         missing = fixtures.loc[~self.covers(fixtures)]
         if missing.empty or "season" not in missing.columns:
-            return f"{len(missing)} Fixtures have no {self.columns[0].split('_')[0]} book"
+            return f"{len(missing)} Fixtures have no book"
         seasons = ", ".join(season_label(int(season)) for season in sorted(set(missing["season"])))
         return f"{len(missing)} Fixtures in {seasons} have no book"
 
 
 #: The opponent. Pre-match rather than closing, against convention, so that the model, the market
 #: and the Pundits are compared on one information set (ADR 0001).
-MARKET_LINE = register(OddsLine("market_line", PREMATCH_COLUMNS))
+#:
+#: Its note points at the margin behind the number. A vig-removed line is a *derived* Prediction,
+#: and issue #8 asks that the removal be "sanity-checked rather than trusted" — so a reader meeting
+#: 0.1936 on the scoreboard is told, there, where to go and look at what was taken out.
+MARKET_LINE = register(
+    OddsLine(
+        "market_line",
+        PREMATCH_COLUMNS,
+        note="vig removed by Shin; check the margin with `python -m epl.benchmarks overround`",
+    )
+)
 
 #: The reference upper bound. Registered like anything else — the scoreboard has no branch per
 #: Predictor and must not grow one — but carrying the caveat that has to travel with its score.
@@ -182,7 +201,9 @@ CEILING_LINE = register(
 )
 
 
-#: Canonical column order for :func:`overround_report`.
+#: Canonical column order for :func:`overround_report`. ``note`` carries each line's caveat, so
+#: the Ceiling Line is labelled here as it is on the scoreboard rather than sitting as a bare row
+#: beside the Market Line.
 OVERROUND_COLUMNS: tuple[str, ...] = (
     "predictor",
     "season",
@@ -192,6 +213,7 @@ OVERROUND_COLUMNS: tuple[str, ...] = (
     "mean_overround",
     "min_overround",
     "max_overround",
+    "note",
 )
 
 
@@ -203,21 +225,28 @@ def overround_report(matches: pd.DataFrame) -> pd.DataFrame:
     removing anything would show up here as a margin that never fell, and the long decline it does
     show — 9.4% in 2005/06 down to ~4.1% in the early 2020s — is a fact about the market that no
     bug would reproduce by accident.
+
+    Seasons a line does not cover are absent rather than blank, because a Season with no market is
+    not a Season whose margin was zero (ADR 0001).
     """
-    rows = [
-        {
-            "predictor": line.name,
-            "season": int(season),
-            "season_label": season_label(int(season)),
-            "division": str(division),
-            "fixtures": int(covered.sum()),
-            "mean_overround": float(line.overround(priced).mean()),
-            "min_overround": float(line.overround(priced).min()),
-            "max_overround": float(line.overround(priced).max()),
-        }
-        for line in (MARKET_LINE, CEILING_LINE)
-        for (season, division), group in matches.groupby(["season", "division"], sort=True)
-        if (covered := line.covers(group)).any()
-        for priced in [group.loc[covered]]
-    ]
+    rows = []
+    for line in (MARKET_LINE, CEILING_LINE):
+        for (season, division), group in matches.groupby(["season", "division"], sort=True):
+            covered = line.covers(group)
+            if not covered.any():
+                continue
+            margin = line.overround(group.loc[covered])
+            rows.append(
+                {
+                    "predictor": line.name,
+                    "season": int(season),
+                    "season_label": season_label(int(season)),
+                    "division": str(division),
+                    "fixtures": int(covered.sum()),
+                    "mean_overround": float(margin.mean()),
+                    "min_overround": float(margin.min()),
+                    "max_overround": float(margin.max()),
+                    "note": line.note,
+                }
+            )
     return pd.DataFrame(rows, columns=list(OVERROUND_COLUMNS))

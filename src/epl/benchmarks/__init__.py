@@ -12,8 +12,9 @@ The **Ceiling Line** is the same treatment of closing odds, available from 2019/
 bound only, always labelled as knowing more than we do. It is never the headline opponent.
 
 The **Naive Baseline** is the floor: Outcome base rates with no knowledge of which Clubs are
-playing, scoring ~0.2292 RPS. Anything that fails to beat it has no value. Its base rates are
-estimated only from Seasons already seen, so even the floor is leak-free.
+playing, scoring **0.22938 RPS** walk-forward. Anything that fails to beat it has no value. Its
+base rates are estimated only from Seasons already seen, so even the floor is leak-free — the
+0.2292 quoted in the design is the whole-window figure, and the difference is the leak refused.
 
 Vig removal implements normalisation, the power method and Shin's method behind one interface, with
 **Shin as the default**. They differ by 0.0002 RPS, so the choice is near-immaterial for

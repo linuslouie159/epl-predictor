@@ -201,6 +201,12 @@ def _require_columns(fixtures: pd.DataFrame) -> None:
         raise LedgerError(f"a frame of Fixtures needs {missing} to be predicted")
 
 
+def _named(predictor: Predictor) -> str:
+    """How a Predictor is referred to in a complaint. A Predictor too broken to have a name still
+    has to be nameable, or the message about it says nothing."""
+    return repr(getattr(predictor, "name", predictor))
+
+
 def visible(predictor: Predictor, fixtures: pd.DataFrame) -> pd.DataFrame:
     """The columns of ``fixtures`` this Predictor is allowed to see.
 
@@ -220,7 +226,7 @@ def _claimed(predictor: Predictor) -> tuple[str, ...]:
     ungranted = [name for name in claimed if name not in PRIVILEGED_FIXTURE_COLUMNS]
     if ungranted:
         raise LedgerError(
-            f"{getattr(predictor, 'name', predictor)!r} claims Fixture columns no Predictor may "
+            f"{_named(predictor)} claims Fixture columns no Predictor may "
             f"see: {ungranted}. Only {list(PRIVILEGED_FIXTURE_COLUMNS)} may be claimed, and only "
             "the Ceiling Line claims them (ADR 0001)"
         )
@@ -248,7 +254,7 @@ def covered(predictor: Predictor, fixtures: pd.DataFrame) -> npt.NDArray[np.bool
     answered = np.asarray(covers(visible(predictor, fixtures)), dtype=bool)
     if len(answered) != len(fixtures):
         raise LedgerError(
-            f"{getattr(predictor, 'name', predictor)!r} gave {len(answered)} answers for "
+            f"{_named(predictor)} gave {len(answered)} answers for "
             f"{len(fixtures)} Fixtures when asked which it covers"
         )
     return answered

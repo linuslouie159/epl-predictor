@@ -81,9 +81,10 @@ Four things about stage 4 worth knowing before building on it:
   different Fixtures. On the 2,660 they share, the Market Line scores 0.1981 and the Ceiling Line
   beats it by 0.0013 RPS. That caveat rides onto the scoreboard as the Ceiling Line's `note` and
   must not be dropped — the bare number reads as the opposite of what it means.
-- **The Predictor contract grew three optional attributes**, all read through
-  `epl.predictors.OPTIONAL_ATTRIBUTES` and none of them on the Protocol (a Protocol member is
-  required of everything claiming it, and almost no Predictor wants these):
+- **The Predictor contract grew three optional attributes**, documented above the accessors in
+  `src/epl/predictors.py` and read through `predictors.also_sees`, `predictors.note` and
+  `schema.covered`. None is on the Protocol (a Protocol member is required of everything claiming
+  it, and almost no Predictor wants these):
   `covers(fixtures)` says which Fixtures a Predictor can speak to at all; `also_sees` claims extra
   Fixture columns, checked against `schema.PRIVILEGED_FIXTURE_COLUMNS`; `note` is a caveat the
   scoreboard prints. **Issue #11's Pundits will want the first and the third.**
