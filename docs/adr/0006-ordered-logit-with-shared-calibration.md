@@ -4,6 +4,14 @@ Elo yields one rating difference; three probabilities are needed. A fixed draw p
 badly wrong at both ends: measured across 7,980 matches, draws run at 32.3% between evenly matched
 Clubs and 13.4% at the widest Supremacy — a 2.4x range, falling monotonically.
 
+That range is the *observed* draw rate with Fixtures bucketed by the **market's** Supremacy, which
+is the only ordering that existed when this was written. It is evidence that the taper is real and
+worth modelling; it is not a target a model is held to. Bucketing by a model's own Supremacy is a
+different measurement — a noisier ordering puts less evenly matched Fixtures in its most-even
+bucket, and those draw less often. Elo measures 27.6% to 13.8% observed over its own buckets
+(issue #9). What a Predictor is judged on is the monotone fall and its predicted curve against its
+observed one, both of which this design delivers.
+
 An ordered logit reproduces that curve for free. A latent match margin slides along a line with two
 fitted cutpoints; the draw band has fixed width, so the share of the distribution falling inside it
 narrows automatically as Supremacy grows. Three parameters, no hand-coded taper, and it respects the
