@@ -27,6 +27,13 @@ Do not "fix" these without reading the linked ADR first:
 - **Dixon-Coles is fitted two different ways** — MLE and Bayesian. [ADR 0007](./docs/adr/0007-mle-for-matches-bayesian-for-projections.md)
 - **The pundit's published scoreline is transformed before scoring.** [ADR 0003](./docs/adr/0003-calibrated-pundit-predictor.md)
 - **Two prediction stores exist, not one**, and one of them must never be rewritten. [ADR 0005](./docs/adr/0005-split-prediction-ledger.md)
+- **The Ceiling Line scores *worse* than the Market Line on the scoreboard** — 0.1968 against
+  0.1936 — and this is not evidence that closing odds are worse. The two are measured over
+  different Fixtures; on the ones they share the Ceiling Line wins by 0.0013 RPS. Its `note` says
+  so, and must keep saying so. [ADR 0001](./docs/adr/0001-pre-match-odds-as-market-benchmark.md)
+- **The Market Line's stored rows say `inputs_seen = 0`** and carry no `latest_input`. Correct: it
+  reads its odds off the Fixture, and a Predictor that consumes no history has no history to leak.
+  Do not make it touch the corpus. A Pundit will record the same.
 - **Refreshing a cached raw file archives the old bytes** into `superseded/` instead of replacing
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
   Both are explained where they live — `src/epl/ingest/football_data.py` and `src/epl/clubs/table.py`.
@@ -55,8 +62,37 @@ every expected value worked by hand before any model uses it.
 walked over the whole Evaluation Window, stored, audited and scored at **0.22938 RPS** over 7,980
 Fixtures and 952 Prediction Rounds.
 
+**Stage 4 is built**: the vig removal (`src/epl/benchmarks/vig.py`), the Market Line and the Ceiling
+Line (`src/epl/benchmarks/market.py`), issue #8. The scoreboard now reads:
+
+```
+     predictor  fixtures    rps  brier  log_loss  accuracy
+   market_line      7980 0.1936 0.5684    0.9582    0.5471
+  ceiling_line      2660 0.1968 0.5717    0.9639    0.5498
+naive_baseline      7980 0.2294 0.6430    1.0642    0.4556
+```
+
 `epl.models`, `epl.pundits` and `epl.simulate` are still documented shells, each naming the issue
 that builds it.
+
+Four things about stage 4 worth knowing before building on it:
+
+- **The Ceiling Line's 0.1968 is not worse than the Market Line's 0.1936.** They are measured over
+  different Fixtures. On the 2,660 they share, the Market Line scores 0.1981 and the Ceiling Line
+  beats it by 0.0013 RPS. That caveat rides onto the scoreboard as the Ceiling Line's `note` and
+  must not be dropped — the bare number reads as the opposite of what it means.
+- **The Predictor contract grew three optional attributes**, all read through
+  `epl.predictors.OPTIONAL_ATTRIBUTES` and none of them on the Protocol (a Protocol member is
+  required of everything claiming it, and almost no Predictor wants these):
+  `covers(fixtures)` says which Fixtures a Predictor can speak to at all; `also_sees` claims extra
+  Fixture columns, checked against `schema.PRIVILEGED_FIXTURE_COLUMNS`; `note` is a caveat the
+  scoreboard prints. **Issue #11's Pundits will want the first and the third.**
+- **A Predictor that covers nothing writes no file**, and `backfill` says so out loud rather than
+  passing over it. That line is also what a broken input column looks like, so read it.
+- **Four books in the corpus have an overround below one** — 2025/26 League One closing averages,
+  as low as 0.955. `vig.is_book` excludes them; no Premier League Fixture and no pre-match book is
+  affected. Do not "fix" this by loosening `as_book`: a book that pays out more than it takes is
+  not a book, and that check is what would catch a genuinely shifted column.
 
 Three things about stage 3 worth knowing before building on it:
 
@@ -84,34 +120,32 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Issue #8 — the Market Line and the Ceiling Line.** Closing #7 unblocked #8, #9 and #11 at once, so
-the graph no longer picks for you. Take #8 first: it is the smaller of the two modelling tickets, it
-is the opponent the whole project is measured against, and putting it on the board before Elo means
-the first real model has something meaningful beside it from its first run rather than only a floor.
-Both are Predictors registered against the contract stage 3 built. Two things about that contract
-will come up in #8's first hour:
+**Issue #9 — pyramid-wide Elo.** It is what the README's build order lists first, it is the first
+real model, and #8 put a meaningful opponent beside it: an Elo that lands between 0.2294 and 0.1936
+is doing something, and one that does not beat 0.2294 has no value at all. Unblocked since #7.
 
-- **The Ceiling Line needs a decision the ledger deliberately does not make for it.** A Predictor
-  sees `schema.VISIBLE_FIXTURE_COLUMNS`, and the closing odds are **not** on that list — they carry
-  team news from after the As-Of Instant, so exposing them to every Predictor would be the leak the
-  allow-list exists to prevent. The Ceiling Line is the one Predictor entitled to them, and it is a
-  labelled exception rather than an oversight (ADR 0001). Decide explicitly how it gets them; do
-  not just append them to the list.
-- **The Market Line reads its odds off the Fixture, not off `Evidence`**, so its rows will record
-  `inputs_seen = 0` and an empty `latest_input`. That is correct and audits clean — a Predictor
-  that consumes no history has no history to leak, the same way a Pundit will. Do not "fix" it by
-  making it touch the corpus.
+Two things about the contract that will come up in its first hour:
 
-**Issue #9 — pyramid-wide Elo** is equally unblocked and is what the README's build order lists
-first. Either is defensible; do not do both at once. Check the graph before starting:
+- **Elo reads the whole pyramid.** `evidence.matches()` with no `divisions` is the call — a Club
+  promoted into the Premier League must arrive with a rating it earned (ADR 0004). The Naive
+  Baseline narrows to the tiers being predicted, and that is the exception rather than the pattern.
+- **Hyperparameters are fitted in the Burn-In Window and frozen** (ADR 0008). `backfill` walks the
+  Evaluation Window while every round still sees everything before it, so the first scored round
+  already has five warmed-up Seasons behind it without one of them being scored.
+
+**Issue #11 — the Pundits** is also unblocked and is the other half of the three-way scoreboard.
+It will want `covers` and `note` from the contract stage 4 added: a Pundit published in the Seasons
+they worked and no others, and a Pundit scored as-stated needs its caveat travelling with it.
+
+Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
+unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage
+lands and there is no appetite to start the next one.
+
+Check the graph before starting:
 
 ```
 gh issue view <n> | sed -n '/## Blocked by/,$p'
 ```
-
-Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
-unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage lands
-and there is no appetite to start the next one.
 
 ```
 conda env create -f environment.yml
@@ -121,5 +155,7 @@ python -m epl.ingest build     # write matches.csv (52,672) + odds_availability.
 python -m epl.ledger backfill  # walk every registered Predictor over the Evaluation Window
 python -m epl.ledger scoreboard
 python -m epl.ledger audit     # re-check both stores and the seal on outputs/live/
+python -m epl.benchmarks overround   # the margin in each book, per Season and tier
+python -m epl.benchmarks methods     # the three vig removals compared on one book
 pytest                         # add --run-network to also hit football-data.co.uk
 ```

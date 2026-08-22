@@ -23,9 +23,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
+import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
-from epl import metrics
+from epl import metrics, predictors
 from epl.predictors import Evidence, Predictor
 from epl.rounds import as_of_instant, kickoff_instants, round_id
 
@@ -77,6 +79,24 @@ VISIBLE_FIXTURE_COLUMNS: tuple[str, ...] = (
     "prematch_odds_home",
     "prematch_odds_draw",
     "prematch_odds_away",
+)
+
+#: What a Predictor may ask for *beyond* :data:`VISIBLE_FIXTURE_COLUMNS`, by naming it in an
+#: ``also_sees`` attribute of its own.
+#:
+#: One Predictor needs an input the allow-list deliberately withholds. The Ceiling Line *is* the
+#: closing odds (ADR 0001), and closing odds absorb team news from after the As-Of Instant — so
+#: appending them to the list above would hand that team news to every Predictor in the project,
+#: which is precisely the leak the list exists to prevent.
+#:
+#: The exception is therefore made in the open and bounded twice. A Predictor claims the columns
+#: it wants in its own source, where a reader of that Predictor can see the claim; and the claim
+#: is checked against this tuple, so ``also_sees`` can never become a second door onto the Outcome.
+#: :func:`epl.predictors.also_sees` is where a Predictor's claim is read, unvalidated.
+PRIVILEGED_FIXTURE_COLUMNS: tuple[str, ...] = (
+    "closing_odds_home",
+    "closing_odds_draw",
+    "closing_odds_away",
 )
 
 #: How every instant is written. ISO to the second: the format upstream never uses, so a hand-
@@ -142,8 +162,9 @@ def predictions_for(
             f"Evidence was cut at {evidence.as_of}, but this round's As-Of Instant is {as_of}"
         )
 
-    visible = fixtures[[name for name in VISIBLE_FIXTURE_COLUMNS if name in fixtures.columns]]
-    probabilities = metrics.as_predictions(predictor.predict(visible, evidence))
+    probabilities = metrics.as_predictions(
+        predictor.predict(visible(predictor, fixtures), evidence)
+    )
     if len(probabilities) != len(fixtures):
         raise LedgerError(
             f"{predictor.name} returned {len(probabilities)} Predictions for "
@@ -178,6 +199,59 @@ def _require_columns(fixtures: pd.DataFrame) -> None:
     missing = [name for name in FIXTURE_COLUMNS if name not in fixtures.columns]
     if missing:
         raise LedgerError(f"a frame of Fixtures needs {missing} to be predicted")
+
+
+def visible(predictor: Predictor, fixtures: pd.DataFrame) -> pd.DataFrame:
+    """The columns of ``fixtures`` this Predictor is allowed to see.
+
+    :data:`VISIBLE_FIXTURE_COLUMNS`, plus whatever the Predictor claims in ``also_sees`` and
+    :data:`PRIVILEGED_FIXTURE_COLUMNS` permits. One function rather than two, so a Predictor is
+    handed the same Fixture whether it is being asked to predict one or asked whether it covers
+    one — otherwise a Predictor could read the Outcome while answering the cheaper question and
+    keep it in its own state until the expensive one.
+    """
+    allowed = (*VISIBLE_FIXTURE_COLUMNS, *_claimed(predictor))
+    return fixtures[[name for name in allowed if name in fixtures.columns]]
+
+
+def _claimed(predictor: Predictor) -> tuple[str, ...]:
+    """The extra Fixture columns this Predictor claims, refusing any it may not have."""
+    claimed = predictors.also_sees(predictor)
+    ungranted = [name for name in claimed if name not in PRIVILEGED_FIXTURE_COLUMNS]
+    if ungranted:
+        raise LedgerError(
+            f"{getattr(predictor, 'name', predictor)!r} claims Fixture columns no Predictor may "
+            f"see: {ungranted}. Only {list(PRIVILEGED_FIXTURE_COLUMNS)} may be claimed, and only "
+            "the Ceiling Line claims them (ADR 0001)"
+        )
+    return claimed
+
+
+def covered(predictor: Predictor, fixtures: pd.DataFrame) -> npt.NDArray[np.bool_]:
+    """Which of ``fixtures`` this Predictor has anything to say about.
+
+    A Predictor that declares no ``covers`` method covers everything, which is the ordinary case.
+    The ones that do not are the Predictors whose input does not span the whole Evaluation Window:
+    the Ceiling Line, whose closing odds begin in 2019/20, and a Pundit, who published in the
+    Seasons they worked and no others (issue #11). Both would otherwise have to invent a
+    Prediction for Fixtures they know nothing about, and a made-up Prediction that scores is worse
+    than an absent one.
+
+    Asked here rather than inside :func:`predictions_for`, because the answer decides which
+    Fixtures exist for the walk at all — a Prediction Round nobody covers should not become a
+    round with nothing in it.
+    """
+    covers = getattr(predictor, "covers", None)
+    if covers is None:
+        return np.ones(len(fixtures), dtype=bool)
+
+    answered = np.asarray(covers(visible(predictor, fixtures)), dtype=bool)
+    if len(answered) != len(fixtures):
+        raise LedgerError(
+            f"{getattr(predictor, 'name', predictor)!r} gave {len(answered)} answers for "
+            f"{len(fixtures)} Fixtures when asked which it covers"
+        )
+    return answered
 
 
 def audit(rows: pd.DataFrame) -> list[str]:

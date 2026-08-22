@@ -1,6 +1,7 @@
 """Benchmarks: the Market Line, the Ceiling Line and the Naive Baseline.
 
-The Naive Baseline is built (issue #7, `naive.py`). The two market lines arrive at issue #8.
+All three are built: the Naive Baseline at issue #7 (`naive.py`), the two market lines at issue #8
+(`market.py`, with the vig removal in `vig.py`).
 
 The **Market Line** is the opponent: vig-removed implied probabilities from the market-average
 *pre-match* odds, scoring ~0.1936 RPS. Pre-match rather than closing, against convention, because
@@ -21,9 +22,42 @@ ever explored. The overround is reported alongside every Market Line so the remo
 sanity-checked rather than trusted; it measures 1.0562 over the Evaluation Window.
 
 Which Seasons carry a market at all is recorded by the ingest, not re-derived here — see
-`epl.ingest.season_coverage`.
+`epl.ingest.odds_availability`. A Season with no odds has no market comparison rather than a
+market comparison of zero, so each line declares what it `covers` and the walk writes nothing for
+the rest (ADR 0001).
+
+Measured over the Evaluation Window: Market Line 0.19362 RPS over 7,980 Fixtures; Ceiling Line
+0.19676 over the 2,660 from 2019/20 — which reads worse only because it is a different, harder
+span. On the Fixtures they share, the Market Line scores 0.19810 and the Ceiling Line beats it by
+0.0013 RPS. That caveat travels with the Ceiling Line onto the scoreboard as its `note`.
+
+    python -m epl.benchmarks overround     the margin in each book, per Season and tier
+    python -m epl.benchmarks methods       the three vig removals compared on one book
 """
 
+from epl.benchmarks import market, vig
+from epl.benchmarks.market import (
+    CEILING_LINE,
+    CLOSING_COLUMNS,
+    MARKET_LINE,
+    PREMATCH_COLUMNS,
+    MarketError,
+    OddsLine,
+    overround_report,
+)
 from epl.benchmarks.naive import NAIVE_BASELINE, UNINFORMED, NaiveBaseline
 
-__all__ = ["NAIVE_BASELINE", "UNINFORMED", "NaiveBaseline"]
+__all__ = [
+    "CEILING_LINE",
+    "CLOSING_COLUMNS",
+    "MARKET_LINE",
+    "NAIVE_BASELINE",
+    "PREMATCH_COLUMNS",
+    "UNINFORMED",
+    "MarketError",
+    "NaiveBaseline",
+    "OddsLine",
+    "market",
+    "overround_report",
+    "vig",
+]

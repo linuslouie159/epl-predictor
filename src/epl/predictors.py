@@ -173,6 +173,49 @@ class Predictor(Protocol):
         ...
 
 
+#: Three attributes a Predictor **may** declare. They are read through the accessors below rather
+#: than named on :class:`Predictor`, because a Protocol member is required of everything that
+#: claims the Protocol — adding them there would mean every Predictor, and every test double,
+#: had to carry three attributes that almost all of them have no use for.
+#:
+#: ``covers(fixtures) -> Sequence[bool]``
+#:     Which Fixtures this Predictor has anything to say about. Declared by the Predictors whose
+#:     input does not span the whole Evaluation Window — the Ceiling Line, whose closing odds
+#:     begin in 2019/20, and a Pundit, who published in the Seasons they worked (issue #11).
+#:     Absent means it covers everything. See :func:`epl.ledger.schema.covered`.
+#:
+#: ``also_sees: tuple[str, ...]``
+#:     Fixture columns this Predictor claims beyond the ledger's allow-list. Only the columns in
+#:     :data:`epl.ledger.schema.PRIVILEGED_FIXTURE_COLUMNS` may be claimed, and today only the
+#:     Ceiling Line claims any (ADR 0001).
+#:
+#: ``note: str``
+#:     A caveat that must travel with this Predictor's score wherever it is reported. The Ceiling
+#:     Line carries one, because a scoreboard line that did not say it knows team news the model
+#:     cannot have would be a misleading number rather than an incomplete one.
+OPTIONAL_ATTRIBUTES: tuple[str, ...] = ("covers", "also_sees", "note")
+
+
+def also_sees(predictor: Predictor) -> tuple[str, ...]:
+    """The extra Fixture columns this Predictor claims, as it claims them.
+
+    Unvalidated: what may actually be claimed is the ledger's rule, not the Predictor's, and
+    :func:`epl.ledger.schema.visible` is where the claim is checked.
+    """
+    return tuple(getattr(predictor, "also_sees", ()))
+
+
+def note(predictor: Predictor | str) -> str:
+    """The caveat that must be printed beside this Predictor's score, or ``""`` if it has none.
+
+    Takes a name as well as a Predictor, because the scoreboard scores stored rows and a stored
+    row carries only a name. A name nobody has registered has no note, which is the right answer
+    for a Predictor whose ledger file outlived its code.
+    """
+    found = _REGISTRY.get(predictor) if isinstance(predictor, str) else predictor
+    return str(getattr(found, "note", "")) if found is not None else ""
+
+
 #: Registered Predictors, in registration order. Module-level and process-wide: importing
 #: ``epl.benchmarks`` is what puts the Naive Baseline on the scoreboard.
 _REGISTRY: dict[str, Predictor] = {}

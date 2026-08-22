@@ -11,10 +11,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pytest
 
 from epl.ledger import backtest, schema
+from epl.predictors import Evidence
 
 
 @pytest.fixture
@@ -160,3 +163,106 @@ class TestTheStore:
             backtest.write(rows)
 
         assert not backtest.path("fixed").exists()
+
+
+class OnlyCoveredSeasons:
+    """A Predictor that covers only some Fixtures — the Ceiling Line's shape.
+
+    It reads a column that exists for part of the corpus and not the rest, and says so rather than
+    inventing a Prediction where it has nothing to go on.
+    """
+
+    name = "only_covered"
+    also_sees = ("closing_odds_home", "closing_odds_draw", "closing_odds_away")
+
+    def covers(self, fixtures: pd.DataFrame) -> pd.Series[bool]:
+        return fixtures["closing_odds_home"].notna()
+
+    def predict(self, fixtures: pd.DataFrame, evidence: Evidence) -> npt.NDArray[np.float64]:
+        return np.tile((1 / 3, 1 / 3, 1 / 3), (len(fixtures), 1))
+
+
+class TestAPredictorThatCoversOnlyPartOfTheWindow:
+    """Some Predictors have nothing to say about some Fixtures, and that is not a failure.
+
+    The Ceiling Line's closing odds begin in 2019/20 and a Pundit publishes only in the Seasons
+    they worked (issue #11). Neither may invent a Prediction for a Fixture it does not cover, and
+    neither may be handled by a branch in the ledger — registering a Predictor is what puts it on
+    the board, and the walk is written once against the contract (spec, user story 16).
+
+    So a Predictor may declare which Fixtures it covers, and the walk drops the rest before rounds
+    are even assigned. A Predictor that declares nothing covers everything.
+    """
+
+    @pytest.fixture
+    def half_priced(self, make_matches: Callable[..., pd.DataFrame]) -> pd.DataFrame:
+        return make_matches(
+            {"date": "2024-08-17", "home_club": "arsenal", "closing_odds_home": pd.NA},
+            {"date": "2024-08-24", "home_club": "everton", "closing_odds_home": 1.66},
+            {"date": "2024-08-31", "home_club": "fulham", "closing_odds_home": 2.10},
+        )
+
+    def test_it_predicts_only_the_fixtures_it_covers(self, half_priced: pd.DataFrame) -> None:
+        rows = backtest.backfill(OnlyCoveredSeasons(), half_priced, seasons=[2024])
+
+        assert list(rows["home_club"]) == ["everton", "fulham"]
+
+    def test_a_round_it_covers_nothing_in_simply_does_not_appear(
+        self, half_priced: pd.DataFrame
+    ) -> None:
+        """Rather than appearing with a made-up Prediction in it. The unpriced Fixture is the only
+        one in its round, so the round goes with it."""
+        rows = backtest.backfill(OnlyCoveredSeasons(), half_priced, seasons=[2024])
+
+        assert "2024-08-16" not in set(rows["prediction_round"])
+
+    def test_the_rows_it_does_write_still_audit_clean(self, half_priced: pd.DataFrame) -> None:
+        rows = backtest.backfill(OnlyCoveredSeasons(), half_priced, seasons=[2024])
+
+        assert schema.audit(rows) == []
+
+    def test_a_predictor_that_covers_nothing_writes_an_empty_ledger(
+        self, make_matches: Callable[..., pd.DataFrame]
+    ) -> None:
+        unpriced = make_matches({"date": "2024-08-17", "closing_odds_home": pd.NA})
+
+        rows = backtest.backfill(OnlyCoveredSeasons(), unpriced, seasons=[2024])
+
+        assert rows.empty
+        assert list(rows.columns) == list(schema.LEDGER_COLUMNS)
+
+    def test_it_is_asked_only_about_columns_it_is_allowed_to_see(
+        self, half_priced: pd.DataFrame
+    ) -> None:
+        """The same allow-list guards this question as guards `predict`. Otherwise a Predictor
+        could read the Outcome here and smuggle it into `predict` in its own state."""
+        seen: list[set[str]] = []
+
+        class Nosy(OnlyCoveredSeasons):
+            def covers(self, fixtures: pd.DataFrame) -> pd.Series[bool]:
+                seen.append(set(fixtures.columns))
+                return fixtures["closing_odds_home"].notna()
+
+        backtest.backfill(Nosy(), half_priced, seasons=[2024])
+
+        allowed = set(schema.VISIBLE_FIXTURE_COLUMNS) | set(OnlyCoveredSeasons.also_sees)
+        assert seen and all(columns <= allowed for columns in seen)
+
+    def test_a_predictor_that_declares_nothing_covers_everything(
+        self, half_priced: pd.DataFrame, make_predictor: Callable[..., object]
+    ) -> None:
+        rows = backtest.backfill(make_predictor(), half_priced, seasons=[2024])
+
+        assert len(rows) == 3
+
+    def test_a_mask_of_the_wrong_length_is_refused_rather_than_aligned(
+        self, half_priced: pd.DataFrame
+    ) -> None:
+        """Silently recycling a short mask would drop Fixtures a Predictor never declined."""
+
+        class Miscounts(OnlyCoveredSeasons):
+            def covers(self, fixtures: pd.DataFrame) -> pd.Series[bool]:
+                return fixtures["closing_odds_home"].notna().iloc[:1]
+
+        with pytest.raises(schema.LedgerError, match="1 answers for 3 Fixtures"):
+            backtest.backfill(Miscounts(), half_priced, seasons=[2024])

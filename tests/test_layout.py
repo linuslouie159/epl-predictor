@@ -31,7 +31,7 @@ FOUNDATIONS = ("epl.windows", "epl.rounds", "epl.paths", "epl.predictors")
 
 #: The modules that are still documented shells. Each is removed from here as its stage is built:
 #: ingest and clubs by tickets 2-4, metrics by ticket 6, the ledger and the Naive Baseline half of
-#: benchmarks by ticket 7 — the Market Line joins the latter at ticket 8.
+#: benchmarks by ticket 7, and the Market Line and Ceiling Line half of it by ticket 8.
 UNBUILT = ("epl.models", "epl.pundits", "epl.simulate")
 
 

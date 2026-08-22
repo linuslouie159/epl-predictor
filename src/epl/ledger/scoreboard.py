@@ -32,13 +32,18 @@ from pathlib import Path
 
 import pandas as pd
 
-from epl import metrics
+from epl import metrics, predictors
 from epl.ledger import schema
 from epl.paths import outputs_dir
 from epl.windows import EVALUATION_WINDOW
 
 #: Canonical column order for the scoreboard. RPS is primary; accuracy is for lay explanation only
 #: and is never the headline (CLAUDE.md).
+#:
+#: ``note`` is last and is usually empty. It carries a caveat a Predictor cannot be honestly read
+#: without — the Ceiling Line's, which knows team news the model cannot have and is scored over a
+#: shorter span than everything else here (ADR 0001). It is read off the registered Predictor by
+#: name, so the scoreboard still has no idea which Predictor any row belongs to.
 SCOREBOARD_COLUMNS: tuple[str, ...] = (
     "predictor",
     "fixtures",
@@ -46,6 +51,14 @@ SCOREBOARD_COLUMNS: tuple[str, ...] = (
     "brier",
     "log_loss",
     "accuracy",
+    "note",
+)
+
+#: The scoreboard's metrics, in order — everything a reader compares Predictors on. Named apart
+#: from :data:`SCOREBOARD_COLUMNS` so a report can lay the numbers out as a table and the notes
+#: as footnotes, rather than printing a paragraph inside a column of floats.
+METRIC_COLUMNS: tuple[str, ...] = tuple(
+    name for name in SCOREBOARD_COLUMNS if name != "note"
 )
 
 #: The probability columns, in the ordinal (Home, Draw, Away) order the metrics expect.
@@ -106,11 +119,15 @@ def _line(predictor: str, group: pd.DataFrame) -> dict[str, object]:
     The Scorecard fields are spread rather than re-listed, so a metric added to
     :class:`epl.metrics.Scorecard` reaches the scoreboard by being named in
     :data:`SCOREBOARD_COLUMNS` and nowhere else.
+
+    The note is looked up by name rather than passed in, because scoring works from stored rows
+    and a stored row carries only a name. A Predictor whose ledger file outlived its code scores
+    exactly as before, with a blank where its caveat would be.
     """
     card = metrics.score(
         group[list(PROBABILITY_COLUMNS)].to_numpy(float), group["outcome"].tolist()
     )
-    return {"predictor": predictor} | asdict(card)
+    return {"predictor": predictor} | asdict(card) | {"note": predictors.note(predictor)}
 
 
 def write(board: pd.DataFrame) -> Path:

@@ -96,6 +96,34 @@ There is **no xG anywhere** in Football-Data. Understat starts 2014/15; FBref ad
 
 Mean overround on the market-average pre-match line: **1.0562** (5.62% margin).
 
+**Re-verified at stage 4 (22 Aug 2026)**, walked end to end through the ledger rather than computed
+in a notebook. `tests/benchmarks/test_market_over_the_corpus.py` re-derives all of it on every run
+against a populated raw cache. Every figure above confirmed to the places it is stated in: 0.193789
+normalised, 0.193622 Shin, 0.193587 power, a spread of 0.00020 RPS, and a mean overround of
+1.05616. The Naive Baseline scores 0.22938 walk-forward, against the 0.2292 the whole-window rates
+give — the difference is the leak it refuses.
+
+The **Ceiling Line** measures for the first time here, and it needs reading carefully:
+
+| Span | Fixtures | Market Line | Ceiling Line |
+|---|---|---|---|
+| 2005/06–2025/26 | 7,980 | 0.19362 | — (no closing book before 2019/20) |
+| 2019/20–2025/26 | 2,660 | 0.19810 | **0.19676** |
+
+Its headline 0.1968 is *worse* than the Market Line's 0.1936, which invites exactly the wrong
+conclusion. The two numbers are measured over different Fixtures: on the 2,660 they share, the
+closing book beats the pre-match one by **0.0013 RPS**, which is what a few hours of team news is
+worth. That is small beside the 0.036 RPS the market takes out of the Naive Baseline — evidence
+for ADR 0001's claim that benchmarking against closing odds would say little about model quality.
+The caveat travels with the Ceiling Line onto the scoreboard as its `note`, because the bare
+number reads as the opposite of what it means.
+
+**Four books in the corpus have an overround below one** — 2025/26 League One *closing* averages,
+as low as 0.955, which is not a price anyone was offered. No Premier League Fixture and no
+pre-match book anywhere is affected, so no scored line loses a Fixture to it. They are excluded by
+`epl.benchmarks.vig.is_book` rather than special-cased: a book that pays more than it takes is not
+a book, and the per-tier overround report walks the whole pyramid.
+
 ### Other measurements
 
 - **Prediction Rounds**: **1,189** across 2000/01–2025/26 (mean 45.7 per season, 8.31 fixtures per round). Corrected at stage 2 — the design recorded 1,332 / 51.2 / 7.42, which the anchor rule below does not produce over this corpus. See the note under *Measured facts*.
@@ -212,6 +240,21 @@ Re-derived on every run by `tests/ledger/test_the_corpus.py`, which skips when `
   Seasons, warmed up and never scored.
 - The Naive Baseline's top pick is a Home win at every one of the 952 rounds, so its accuracy is
   just the Home-win rate. Which is why accuracy is never the headline.
+
+## The market benchmarks
+
+Added at stage 4 (issue #8), which put the opponent on the board. Three of these are extensions to
+the Predictor contract rather than facts about the market, and all three exist because the Ceiling
+Line needs something the ledger deliberately does not give every Predictor.
+
+- **A Predictor may declare which Fixtures it `covers`.** The Ceiling Line's closing book begins in 2019/20 and a Pundit publishes only in the Seasons they worked, so both would otherwise have to invent Predictions for Fixtures they know nothing about. The walk asks before it assigns rounds, so a round nobody covers never becomes an empty round. A Predictor that declares nothing covers everything, which is every other Predictor.
+- **A Predictor may claim extra Fixture columns by naming them in `also_sees`.** Only what `epl.ledger.schema.PRIVILEGED_FIXTURE_COLUMNS` permits — the three closing-odds columns — and only the Ceiling Line claims any. Appending them to the ordinary allow-list would have handed team news from after the As-Of Instant to every Predictor in the project, which is the leak the allow-list exists to prevent (ADR 0001). Making the claim in the Predictor's own source is what keeps the exception visible where it is used rather than buried where it is granted.
+- **A Predictor may carry a `note`, and the scoreboard prints it.** The Ceiling Line needs one: its RPS is measured over a shorter, harder span than everything else on the board, so the bare number reads as the opposite of what it means. Generic rather than a branch — the scoreboard looks a note up by name and has no idea which Predictor a row belongs to.
+- **The overround report is a command, not a column.** `python -m epl.benchmarks overround` writes `outputs/overround.csv` and prints the per-Season margin. It belongs outside the ledger's row schema because it is a fact about a book rather than about a Prediction, and adding a column that only two Predictors could fill would be the per-Predictor branch the ledger refuses.
+
+The vig removal itself is `epl.benchmarks.vig`: `normalise`, `power` and `shin` behind
+`remove(book, method=...)`, solved by fixed-step bisection rather than to a tolerance so that a
+rebuilt backtest file is byte-identical to the last one (ADR 0005).
 
 ## Open risks
 

@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from epl import predictors
 from epl.ledger import schema, scoreboard
 from epl.predictors import Evidence
 
@@ -151,3 +152,43 @@ class TestTheScoreboardFile:
         assert written.name == "scoreboard.csv"
         assert written.parent.name == "outputs"
         assert pd.read_csv(written)["predictor"].tolist() == ["fixed"]
+
+
+class TestTheCaveatsTravelWithTheScores:
+    """A Predictor may carry a note, and it has to reach every place its score is reported.
+
+    The Ceiling Line is why (issue #8): a line that knows team news the model cannot have, scored
+    over a shorter span than everything else on the board, is a misleading number rather than an
+    incomplete one if it appears bare. The mechanism is generic — the scoreboard reads a note off
+    whatever Predictor the row names, and has no idea which one that is.
+    """
+
+    def test_a_note_reaches_the_board(
+        self, played: pd.DataFrame, make_predictor: Callable[..., object], registry: dict
+    ) -> None:
+        caveated = make_predictor("caveated", CERTAIN_HOME)
+        caveated.note = "knows something the others do not"
+        predictors.register(caveated)
+
+        board = scoreboard.build(_rows(caveated, played), played, seasons=[2005])
+
+        assert list(board["note"]) == ["knows something the others do not"]
+
+    def test_a_predictor_without_one_gets_a_blank(
+        self, played: pd.DataFrame, make_predictor: Callable[..., object], registry: dict
+    ) -> None:
+        plain = predictors.register(make_predictor("plain", CERTAIN_HOME))
+
+        board = scoreboard.build(_rows(plain, played), played, seasons=[2005])
+
+        assert list(board["note"]) == [""]
+
+    def test_a_stored_predictor_nobody_registered_still_scores(
+        self, played: pd.DataFrame, make_predictor: Callable[..., object], registry: dict
+    ) -> None:
+        """A ledger file can outlive the code that wrote it (ADR 0005). Scoring must not depend on
+        the Predictor still being registered — only the note does, and its absence is a blank."""
+        board = scoreboard.build(_rows(make_predictor("ghost"), played), played, seasons=[2005])
+
+        assert board.loc[0, "fixtures"] == 2
+        assert board.loc[0, "note"] == ""

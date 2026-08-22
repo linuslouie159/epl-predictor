@@ -320,3 +320,83 @@ class TestAFixtureCarriesNoResult:
         schema.predictions_for(cheat, priced, evidence)
 
         assert "closing_odds_home" not in cheat.saw.columns
+
+
+class Privileged:
+    """A Predictor claiming closing odds as a labelled exception, the way the Ceiling Line does."""
+
+    name = "privileged"
+    also_sees = ("closing_odds_home", "closing_odds_draw", "closing_odds_away")
+    saw: pd.DataFrame
+
+    def predict(self, fixtures: pd.DataFrame, evidence: Evidence) -> npt.NDArray[np.float64]:
+        self.saw = fixtures
+        return np.tile(UNIFORM, (len(fixtures), 1))
+
+
+class Greedy:
+    """A Predictor that tries to grant itself the answer sheet through the same door."""
+
+    name = "greedy"
+    also_sees = ("outcome",)
+
+    def predict(self, fixtures: pd.DataFrame, evidence: Evidence) -> npt.NDArray[np.float64]:
+        return np.tile(UNIFORM, (len(fixtures), 1))
+
+
+class TestTheLabelledException:
+    """How the Ceiling Line gets the one input the allow-list deliberately withholds (ADR 0001).
+
+    Appending the closing odds to :data:`schema.VISIBLE_FIXTURE_COLUMNS` would hand team news from
+    after the As-Of Instant to *every* Predictor, which is the leak the allow-list exists to
+    prevent. So a Predictor names the extra columns it claims, the claim is checked against a
+    short list of columns that may be claimed at all, and it is visible in the Predictor's own
+    source rather than buried in the ledger.
+    """
+
+    def test_a_predictor_that_claims_the_closing_odds_is_handed_them(
+        self, make_matches: Callable[..., pd.DataFrame], evidence: Evidence
+    ) -> None:
+        priced = make_matches({"date": "2024-08-17", "closing_odds_home": 1.66})
+        ceiling = Privileged()
+
+        schema.predictions_for(ceiling, priced, evidence)
+
+        assert ceiling.saw["closing_odds_home"].tolist() == [1.66]
+
+    def test_it_still_cannot_see_anything_else_about_the_fixture(
+        self, round_fixtures: pd.DataFrame, evidence: Evidence
+    ) -> None:
+        """The exception widens the allow-list by exactly what was claimed and by nothing else."""
+        ceiling = Privileged()
+
+        schema.predictions_for(ceiling, round_fixtures, evidence)
+
+        allowed = set(schema.VISIBLE_FIXTURE_COLUMNS) | set(Privileged.also_sees)
+        assert set(ceiling.saw.columns) <= allowed
+        assert "outcome" not in ceiling.saw.columns
+
+    def test_only_the_closing_odds_may_be_claimed(self) -> None:
+        """The list of claimable columns is itself an allow-list. Without it, `also_sees` would be
+        a way for any Predictor to grant itself the Outcome and still audit clean."""
+        assert set(schema.PRIVILEGED_FIXTURE_COLUMNS) == {
+            "closing_odds_home",
+            "closing_odds_draw",
+            "closing_odds_away",
+        }
+
+    def test_claiming_anything_else_is_refused_by_name(
+        self, round_fixtures: pd.DataFrame, evidence: Evidence
+    ) -> None:
+        with pytest.raises(schema.LedgerError, match="outcome"):
+            schema.predictions_for(Greedy(), round_fixtures, evidence)
+
+    def test_a_predictor_that_claims_nothing_sees_the_ordinary_allow_list(
+        self, make_matches: Callable[..., pd.DataFrame], evidence: Evidence
+    ) -> None:
+        priced = make_matches({"date": "2024-08-17", "closing_odds_home": 1.66})
+        cheat = Cheat()
+
+        schema.predictions_for(cheat, priced, evidence)
+
+        assert "closing_odds_home" not in cheat.saw.columns

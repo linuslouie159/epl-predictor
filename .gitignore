@@ -40,5 +40,8 @@ venv/
 Thumbs.db
 
 # The scoreboard is derived from both stores by `python -m epl.ledger scoreboard` and is
-# regenerable, so it is code output rather than evidence (ADR 0005 again).
+# regenerable, so it is code output rather than evidence (ADR 0005 again). The overround report
+# that `python -m epl.benchmarks overround` writes is derived from the raw cache for the same
+# reason — it is the vig removal's receipt, re-derivable at any time, not a record of a claim.
 outputs/scoreboard.csv
+outputs/overround.csv

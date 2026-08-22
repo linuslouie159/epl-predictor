@@ -14,10 +14,14 @@ Measured on the Evaluation Window (2005/06–2025/26, 7,980 Fixtures):
 
 | Predictor | RPS | Meaning |
 |---|---|---|
-| Naive Baseline | 0.2292 | the floor — beat this or the model has no value |
+| Naive Baseline | 0.2294 | the floor — beat this or the model has no value |
 | **Target** | **≤ 0.1986** | market + 0.005 — this is success |
 | Market Line | 0.1936 | the opponent |
-| Ceiling Line | — | reference only; knows team news we don't |
+| Ceiling Line | 0.1968* | reference only; knows team news we don't |
+
+\* over its own 2,660 Fixtures from 2019/20, not the 7,980 above — the two numbers are not
+comparable. On the Fixtures they share, the Market Line scores 0.1981 and the Ceiling Line beats it
+by 0.0013 RPS, which is what a few hours of team news is worth.
 
 The system does **not** need to beat the market. It needs to be leak-free, well calibrated, and
 within a stated distance of the market while beating the Naive Baseline and the Pundits.
@@ -85,7 +89,8 @@ src/epl/ingest/         football-data, pundit scrapers
 src/epl/clubs/          canonical Club table + Alias resolution
 src/epl/metrics/        RPS, Brier, log loss, calibration
 src/epl/models/         elo, ordered logit, dixon-coles, calibration layer
-src/epl/benchmarks/     market line (vig removal), naive baseline
+src/epl/benchmarks/     market line + ceiling line (vig.py), naive baseline
+outputs/overround.csv   the margin in each book per Season; regenerable, gitignored
 src/epl/pundits/        grading + Calibrated Pundit
 src/epl/simulate/       Bayesian fit + Monte Carlo Season Projection
 src/epl/ledger/         Prediction stores, the row audit, the scoreboard
@@ -229,3 +234,36 @@ The Naive Baseline is the floor, and it is fitted walk-forward: at each round it
 Outcomes its Evidence holds. It scores **0.22938 RPS** over the Evaluation Window's 7,980 Fixtures.
 The published 0.2292 is the whole-window figure, computed from rates that already know how the
 window turned out; the 0.0002 difference is the leak being refused, not a bug.
+
+## The market benchmarks
+
+The **Market Line** is the opponent: the market-average *pre-match* book with the vig removed. It
+scores **0.19362 RPS** over the Evaluation Window's 7,980 Fixtures — 0.036 better than the floor,
+which is the gap a model has to find some of.
+
+The **Ceiling Line** is the same arithmetic on the *closing* book, from 2019/20. It is a reference
+upper bound and never the headline opponent, and it carries a note onto the scoreboard saying so,
+because its raw RPS looks worse than the Market Line's purely by being measured over a different,
+harder span ([ADR 0001](./docs/adr/0001-pre-match-odds-as-market-benchmark.md)).
+
+Vig removal offers three methods behind one interface, with **Shin as the default**:
+
+```
+python -m epl.benchmarks methods       # one book under all three
+python -m epl.benchmarks overround     # the margin per Season and tier; writes outputs/overround.csv
+```
+
+| Method | RPS | |
+|---|---|---|
+| normalisation | 0.19379 | divides the book out proportionally |
+| Shin | 0.19362 | **default** — corrects favourite-longshot bias from a stated mechanism |
+| power | 0.19359 | corrects it harder, from a free exponent |
+
+A spread of 0.0002, so the choice is near-immaterial for benchmarking — which is the point of
+being able to run all three rather than being told. The overround report is the removal's receipt:
+the margin falls from 9.4% in 2005/06 to about 4.1% in the early 2020s, and a removal that had
+quietly stopped removing anything would show up there before it showed up on the scoreboard.
+
+Seasons 2000/01–2001/02 carry no odds at all. Each line declares which Fixtures it `covers`, so
+those Seasons produce no rows rather than invented ones — no market comparison, not a market
+comparison of zero.

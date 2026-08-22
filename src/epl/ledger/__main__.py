@@ -69,6 +69,13 @@ def _backfill(matches_path: Path | None, predictor: str | None) -> int:
     for one in predictors:
         rows = backtest.backfill(one, matches)
         written = backtest.write(rows)
+        # A Predictor that covers none of the window writes no file, which is the honest outcome
+        # for the Ceiling Line before 2019/20 and for a Pundit outside the Seasons they published
+        # in. Said out loud rather than passed over, because it is also what a broken input column
+        # would look like.
+        if not written:
+            print(f"{one.name}: nothing to predict in {window} — it covers none of it")
+            continue
         rounds = rows["prediction_round"].nunique()
         print(f"{one.name}: {len(rows)} Predictions over {rounds} rounds, {window} -> {written[0]}")
     return 0
@@ -80,7 +87,16 @@ def _scoreboard(matches_path: Path | None) -> int:
     board = scoreboard.build(rows, matches)
     destination = scoreboard.write(board)
 
-    print(board.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+    # The metrics as a table and the notes underneath it. A caveat long enough to be worth
+    # printing is too long to sit in a column of floats, and one that wrapped a table into
+    # illegibility would end up ignored — which for the Ceiling Line's is the whole risk.
+    print(
+        board[list(scoreboard.METRIC_COLUMNS)].to_string(
+            index=False, float_format=lambda value: f"{value:.4f}"
+        )
+    )
+    for _, line in board.loc[board["note"].astype(str) != ""].iterrows():
+        print(f"  {line['predictor']}: {line['note']}")
     print(f"-> {destination}")
 
     # A registered Predictor with nothing stored has no metrics — epl.metrics refuses to average

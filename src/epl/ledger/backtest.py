@@ -59,6 +59,10 @@ def backfill(
     scoped = matches.loc[
         matches["season"].isin(list(seasons)) & matches["division"].isin(list(divisions))
     ]
+    # Asked before rounds are assigned, so a round this Predictor covers nothing in never becomes
+    # a round at all. Most Predictors cover everything and this is a no-op; the ones that do not
+    # are the Ceiling Line and, later, the Pundits.
+    scoped = scoped.loc[schema.covered(predictor, scoped)]
     if scoped.empty:
         return schema.empty()
 
