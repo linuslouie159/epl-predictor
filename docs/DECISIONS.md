@@ -297,14 +297,93 @@ cutpoints ±0.62318**. It scores 0.20554 RPS there against the base rate's 0.223
   the market's, which is why its top end is lower — the shape is reproduced, the endpoints are the
   model's own.
 - **Elo quotes draws a little too often in every bucket** — the market *under*-quotes them at the
-  even end, 28.6% against 32.0% observed. Both are what issue #10's shared calibration layer is
-  for. Elo's is the frozen-hyperparameter drift ADR 0008 accepts by name: the band was fitted on
+  even end, 28.6% against 32.0% observed. Both are what issue #10's shared calibration layer was
+  for; what it did to them when it arrived is "Measured at stage 6" below. Elo's is the
+  frozen-hyperparameter drift ADR 0008 accepts by name: the band was fitted on
   2001/02–2004/05 and the draw rate has moved since. Pinned by a test so it cannot be forgotten.
 - **Promoted Clubs arrive with ratings that differ**, in all 21 scored Seasons. For 2005/06:
   Sunderland 1679.8 from 206 matches, Wigan 1623.9 from 230, West Ham 1565.6 from 206. Not one is
   at the 1500 starting value.
 - **By the first scored Prediction Round the thinnest Premier League rating rests on 190 matches**
   — five Burn-In Seasons of football. This is what closes open risk 4.
+
+## The shared calibration layer
+
+Added at stage 6 (issue #10). `epl.calibration` is the isotonic step and the walk that fits it;
+`epl.ledger.scoreboard` is where it is applied and both sides of it are published.
+
+- **It lives at the top level, not in `epl.models`.** The README's layout and three docstrings said
+  `epl.models` before it existed. It is not a model — it takes Predictions and returns Predictions,
+  and it wraps the Market Line and the Pundits exactly as it wraps Elo — and putting it there would
+  have made `epl.models` and `epl.ledger` import each other, since the ledger holds the Predictions
+  it walks over. It sits beside `predictors.py`, which is the contract it wraps. It cannot live in
+  `epl.metrics` either: no function in that package may take or produce a Prediction, which is what
+  makes the three-way scoreboard structurally incapable of being apples-to-oranges.
+- **Nothing is stored.** A calibrated Prediction is a function of a stored Prediction *and of
+  Outcomes that happened after it*, so it is derived at scoring time. No row in either store knows
+  an Outcome (ADR 0005), and a store whose rows were built from Outcomes would lose the property
+  that makes a leaked Prediction distinguishable from a recorded one.
+- **One isotonic map per Outcome, fitted one-versus-rest, then renormalised.** Per Outcome rather
+  than pooled across all three, because the defect it was built for is Outcome-specific: a pooled
+  map cannot lower Elo's draw quotes without lowering every Home and Away quote in the same
+  probability band. The reliability diagram pools because it asks one pooled question; the
+  correction does not, because it answers three.
+- **The training cut is `kickoff < as_of`, strictly.** An Outcome is not knowable until its Fixture
+  has been played, so this is the same cut `Evidence` applies to the corpus and it is applied for
+  the same reason. This is the one thing in the project fitted on results, so it is the one place a
+  leak could enter with every stored row still auditing clean.
+- **380 Predictions are needed before a map is fitted at all**, one Season of Premier League
+  Fixtures, stated rather than tuned. An isotonic map has as many knots as the Predictor has
+  distinct quotes, so on a smaller sample it can rest one match on a knot and hand back the Outcome
+  that happened as though it were a probability. The cost is visible rather than hidden: the first
+  380 Predictions of each track record are uncorrected, and the scoreboard reports `corrected`.
+- **The headline numbers stay pre-calibration**, for the reason measured below.
+
+### Measured at stage 6 (23 Aug 2026)
+
+Re-derived on every run by `tests/test_calibration_over_the_corpus.py`, which skips when `data/raw/`
+is absent.
+
+**The layer makes every Predictor worse.** Walk-forward over the Evaluation Window:
+
+| Predictor | Fixtures | corrected | RPS | calibrated RPS | ten-bin error | calibrated | mass moved |
+|---|---|---|---|---|---|---|---|
+| Market Line | 7,980 | 7,600 | 0.19362 | 0.19450 | 0.0061 | 0.0124 | 0.034 |
+| Ceiling Line | 2,660 | 2,280 | 0.19676 | 0.19800 | 0.0060 | 0.0084 | 0.033 |
+| Elo | 7,980 | 7,600 | 0.19943 | 0.20037 | 0.0055 | 0.0097 | 0.031 |
+| Naive Baseline | 7,980 | 7,600 | 0.22938 | 0.23087 | 0.0061 | 0.0161 | 0.046 |
+
+Two effects add up to that, and the numbers below separate them rather than reporting the sum as one
+fact about the corpus.
+
+- **Most of it is knot resolution.** An isotonic map gets a knot per distinct quote, and market odds
+  and Elo edges are nearly continuous — **7,909 distinct Home quotes across 7,980 Fixtures** — so
+  most knots rest on a single Fixture and the map fits noise. Cutting the knots at ten equal-width
+  probability bands instead takes Elo from 0.20037 to **0.19968** and the Market Line from 0.19450
+  to **0.19404**, recovering 73% and 52% of the loss. That variant is not shipped: the band count
+  would be a hyperparameter, and ADR 0008 wants those fitted inside a Burn-In Window that holds no
+  stored Prediction. It is re-derived by the corpus test from `Curve` and `Isotonic`, the layer's
+  own public API, so the alternative is measured rather than asserted.
+- **The rest is the corpus.** Even coarse, both stay worse than raw. All four sit at a pooled
+  ten-bin calibration error of about 0.006 before the layer touches them, so there is little real
+  miscalibration left for a monotone map to find.
+- **At full resolution it leaves each Predictor less calibrated than it found it.** Every
+  `calibrated` error above is larger than the one beside it. That is what rules out "the correction
+  is right and RPS is judging it unfairly" — the shipped layer raises the very number it exists to
+  lower.
+- **This is overfitting, not a wiring fault.** A clean split half of the Market Line's 7,980
+  Fixtures, with none of the walk's machinery involved: fitted on the older half by kickoff, the map
+  improves that half by **0.0017** RPS and costs the later half **0.0005**.
+- **The correction points the right way; the noise around it is bigger.** Elo's draw quote at even
+  Supremacy moves **30.2% → 29.3%** against 27.6% observed, which is exactly the defect issue #9
+  handed this layer. At the widest Supremacy it overshoots: 14.5% → 13.3% against 13.8% observed.
+- **So the double reporting is what earned its place.** Publishing only the post-calibration column
+  would have applied a silent ~0.001 RPS tax to every Predictor on the board, and nobody would have
+  had a number to notice it with. ADR 0006 wrote that rule expecting the warning to point at a
+  model; here it points at the layer.
+- **Re-measure at issue #11.** A Pundit scored as-stated publishes `[1, 0, 0]` (ADR 0003), which is
+  the most miscalibrated Prediction there is. That is the first Predictor this layer has something
+  real to correct, and none of the numbers above should be assumed to survive it.
 
 ## Open risks
 

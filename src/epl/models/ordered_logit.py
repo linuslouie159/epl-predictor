@@ -28,9 +28,11 @@ ADR 0008). Nothing in this module fits anything: it is the mapping, and it is de
 of Elo, of matches and of Seasons, so that Dixon-Coles or anything else with a latent margin can be
 read through the same three numbers.
 
-Calibration is a separate step and belongs to issue #10. What comes out of here is a Predictor's
-*raw* output, which every metric is reported against as well as post-calibration, so that a large
-correction reads as a warning about the model rather than as a silent fix (ADR 0006).
+Calibration is a separate step and lives in :mod:`epl.calibration` (issue #10). What comes out of
+here is a Predictor's *raw* output, which every metric is reported against as well as
+post-calibration, so that a large correction reads as a warning rather than as a silent fix
+(ADR 0006). On this corpus the correction is large and buys nothing, so the raw output is what the
+scoreboard's headline numbers are still read off — see docs/DECISIONS.md, "Measured at stage 6".
 """
 
 from __future__ import annotations

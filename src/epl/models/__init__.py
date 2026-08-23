@@ -1,7 +1,12 @@
-"""Models: Elo, the ordered logit, Dixon-Coles, and the shared calibration layer.
+"""Models: Elo, the ordered logit, and Dixon-Coles.
 
-Elo through an ordered logit is built (issue #9). The shared isotonic calibration (#10),
-Dixon-Coles by MLE (#13) and the Bayesian posterior (#14) are not.
+Elo through an ordered logit is built (issue #9). Dixon-Coles by MLE (#13) and the Bayesian
+posterior (#14) are not.
+
+The shared isotonic calibration layer (#10) is built and does **not** live here. It takes
+Predictions and gives back Predictions, it wraps the Market Line and the Pundits as readily as it
+wraps a model, and it is applied at scoring time — so it sits in :mod:`epl.calibration`, beside
+the Predictor contract it wraps. Nothing in this package calls it.
 
     from epl.models import ELO
 
@@ -11,7 +16,9 @@ Dixon-Coles by MLE (#13) and the Bayesian posterior (#14) are not.
 Baseline's 0.22938 and the Market Line's 0.19362. It takes 0.030 of the 0.036 RPS the market takes
 out of the floor — 84% of the available edge, from ratings and nothing else, before any calibration
 or any goal model. It is not expected to reach the market, and the 0.0008 it still sits above the
-README's ≤0.1986 target is what issues #10 and #13 are for.
+README's ≤0.1986 target now rests entirely on issue #13: the shared calibration layer measured at
+stage 6 costs Elo 0.0009 RPS rather than buying any, because Elo is already well calibrated and
+what a monotone map finds in it is sampling noise (docs/DECISIONS.md, "Measured at stage 6").
 
 Three decisions constrain what goes here:
 

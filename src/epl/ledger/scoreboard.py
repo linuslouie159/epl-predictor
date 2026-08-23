@@ -18,10 +18,18 @@ Two rules the join encodes:
   a superseding row at a new As-Of Instant (ADR 0005); scoring both would count the Fixture twice
   and average the mistake back in.
 
+**Every metric is reported twice**, pre-calibration and post-calibration (ADR 0006, issue #10). The
+shared isotonic layer lives in :mod:`epl.calibration` and is applied here rather than inside any
+Predictor, so a Predictor gets calibrated by being registered and there is no calibration code
+anywhere for a per-Predictor branch to be added to. The size of the correction rides onto the board
+beside the two sets of numbers: a layer that moves a great deal of probability mass and buys nothing
+is a warning, and publishing only the better of the two columns is how that warning gets lost.
+
 The scoreboard sits at `outputs/scoreboard.csv` rather than inside either store: it summarises
 both, so it belongs to neither, and reading a store must never pick up a report as if it were a
 file of Predictions. It is gitignored, because it is derived and regenerable — the same reasoning
-ADR 0005 applies to the Backtest Predictions themselves. Only `outputs/live/` is evidence.
+ADR 0005 applies to the Backtest Predictions themselves. Only `outputs/live/` is evidence. The
+reliability diagrams beside it at `outputs/reliability.csv` are published on the same terms.
 """
 
 from __future__ import annotations
@@ -32,37 +40,80 @@ from pathlib import Path
 
 import pandas as pd
 
-from epl import metrics, predictors
+from epl import calibration, metrics, predictors
 from epl.ledger import schema
 from epl.paths import outputs_dir
 from epl.windows import EVALUATION_WINDOW
 
-#: Canonical column order for the scoreboard. RPS is primary; accuracy is for lay explanation only
-#: and is never the headline (CLAUDE.md).
+#: Every metric a reader compares Predictors on, in order. RPS is primary; accuracy is for lay
+#: explanation only and is never the headline (CLAUDE.md).
 #:
-#: ``note`` is last and is usually empty. It carries a caveat a Predictor cannot be honestly read
-#: without — the Ceiling Line's, which knows team news the model cannot have and is scored over a
-#: shorter span than everything else here (ADR 0001). It is read off the registered Predictor by
-#: name, so the scoreboard still has no idea which Predictor any row belongs to.
+#: This is the one list. :data:`SCOREBOARD_COLUMNS` and both printed views below are derived from
+#: it, so a metric added here reaches the file *and* both tables — the alternative, three
+#: hand-written lists, is how a metric ends up in the CSV and in neither table anybody reads.
+#:
+#: The first four are :class:`epl.metrics.Scorecard`'s fields, spread by :func:`_scores`. ``ece``
+#: is not a Scorecard field: it is the reliability diagram's one-number summary, and it is on the
+#: board because it is the number the calibrated half exists to move.
+METRICS: tuple[str, ...] = ("rps", "brier", "log_loss", "accuracy", "ece")
+
+#: Every metric appears twice, once bare and once under this prefix (ADR 0006). A calibration
+#: layer can mask a broken model by correcting its symptoms, so the pre-calibration numbers are
+#: published beside the post-calibration ones and neither may be reported alone.
+CALIBRATED_PREFIX = "calibrated_"
+
+
+def _calibrated(*names: str) -> tuple[str, ...]:
+    """The calibrated spelling of some metric names."""
+    return tuple(f"{CALIBRATED_PREFIX}{name}" for name in names)
+
+
+#: Canonical column order for the scoreboard.
+#:
+#: ``corrected`` and ``correction`` describe what the layer did: how many Predictions a fitted map
+#: reached, and how much probability mass it moved. ``note`` is last and is usually empty. It
+#: carries a caveat a Predictor cannot be honestly read without — the Ceiling Line's, which knows
+#: team news the model cannot have and is scored over a shorter span than everything else here
+#: (ADR 0001). It is read off the registered Predictor by name, so the scoreboard still has no idea
+#: which Predictor any row belongs to.
 SCOREBOARD_COLUMNS: tuple[str, ...] = (
     "predictor",
     "fixtures",
-    "rps",
-    "brier",
-    "log_loss",
-    "accuracy",
+    *METRICS,
+    *_calibrated(*METRICS),
+    "corrected",
+    "correction",
     "note",
 )
 
-#: The scoreboard's metrics, in order — everything a reader compares Predictors on. Named apart
-#: from :data:`SCOREBOARD_COLUMNS` so a report can lay the numbers out as a table and the notes
-#: as footnotes, rather than printing a paragraph inside a column of floats.
-METRIC_COLUMNS: tuple[str, ...] = tuple(
-    name for name in SCOREBOARD_COLUMNS if name != "note"
+#: The two views a reader is shown, because fifteen columns of floats on one line is a table nobody
+#: reads. Same metrics, same order, twice — which is the point ADR 0006 is making.
+PRE_CALIBRATION_COLUMNS: tuple[str, ...] = ("predictor", "fixtures", *METRICS)
+POST_CALIBRATION_COLUMNS: tuple[str, ...] = (
+    "predictor",
+    "corrected",
+    *_calibrated(*METRICS),
+    "correction",
 )
 
 #: The probability columns, in the ordinal (Home, Draw, Away) order the metrics expect.
 PROBABILITY_COLUMNS: tuple[str, ...] = ("prob_home", "prob_draw", "prob_away")
+
+#: The same, after the shared calibration layer. Named apart from the stored columns rather than
+#: overwriting them: both halves of every comparison have to survive to be reported (ADR 0006).
+CALIBRATED_PROBABILITY_COLUMNS: tuple[str, ...] = _calibrated(*PROBABILITY_COLUMNS)
+
+#: What each form of a Prediction is called wherever both are published side by side. ``raw`` is
+#: pre-calibration and ``calibrated`` is post-calibration.
+FORMS: tuple[str, ...] = ("raw", "calibrated")
+
+#: Canonical column order for the published reliability diagrams — :data:`epl.metrics.BINS` bins
+#: per Predictor per form, which is issue #10's fourth acceptance criterion.
+RELIABILITY_REPORT_COLUMNS: tuple[str, ...] = (
+    "predictor",
+    "form",
+    *metrics.RELIABILITY_COLUMNS,
+)
 
 
 def path() -> Path:
@@ -96,43 +147,165 @@ def scored_predictions(
     return joined.loc[joined["outcome"].notna()].reset_index(drop=True)
 
 
+def calibrated_predictions(
+    rows: pd.DataFrame,
+    matches: pd.DataFrame,
+    *,
+    seasons: Iterable[int] = EVALUATION_WINDOW,
+) -> pd.DataFrame:
+    """:func:`scored_predictions`, with each Prediction's calibrated form beside its raw one.
+
+    The shared isotonic layer is applied here, one Predictor at a time and walk-forward within each
+    (:mod:`epl.calibration`). Per Predictor because a map is a statement about one Predictor's own
+    quotes — "when *this* Predictor says 20% Draw, how often is it a Draw?" — and pooling several
+    Predictors' quotes into one map would correct each of them with the others' mistakes.
+
+    Five columns are added: the three of :data:`CALIBRATED_PROBABILITY_COLUMNS`, plus ``corrected``,
+    which says whether a fitted map reached that row at all, and ``correction``, the probability
+    mass it moved. The raw columns are untouched, because every metric is reported both ways
+    (ADR 0006).
+
+    Public for the same reason :func:`scored_predictions` is: the draw curve, the reliability
+    diagrams and the scoreboard are all a group over this one table, and none of them should be
+    walking the calibration a second time to get it.
+    """
+    scored = scored_predictions(rows, matches, seasons=seasons)
+    if scored.empty:
+        return scored.assign(
+            **{name: pd.Series(dtype="float64") for name in CALIBRATED_PROBABILITY_COLUMNS},
+            corrected=pd.Series(dtype="bool"),
+            correction=pd.Series(dtype="float64"),
+        )
+
+    # Written back against each Predictor's own index. The walk returns its rows in the order it
+    # was handed them, so the group's index is what puts each calibrated Prediction back beside the
+    # raw one it came from — rather than a position in a frame that has been grouped since.
+    calibrated = pd.DataFrame(
+        index=scored.index, columns=list(CALIBRATED_PROBABILITY_COLUMNS), dtype=float
+    )
+    reached = pd.Series(False, index=scored.index)
+    moved = pd.Series(0.0, index=scored.index)
+    for _, group in scored.groupby("predictor", sort=True):
+        walked = calibration.walk_forward(
+            group[list(PROBABILITY_COLUMNS)].to_numpy(float),
+            group["outcome"].tolist(),
+            group["as_of_instant"],
+            group["kickoff"],
+        )
+        calibrated.loc[group.index, list(CALIBRATED_PROBABILITY_COLUMNS)] = walked.predictions
+        reached.loc[group.index] = walked.fitted
+        moved.loc[group.index] = walked.moved
+    return scored.join(calibrated).assign(corrected=reached, correction=moved)
+
+
 def build(
     rows: pd.DataFrame,
     matches: pd.DataFrame,
     *,
     seasons: Iterable[int] = EVALUATION_WINDOW,
 ) -> pd.DataFrame:
-    """Every Predictor in ``rows``, scored over the window, best RPS first."""
-    scored = scored_predictions(rows, matches, seasons=seasons)
-    lines = [
-        _line(str(name), group)
-        for name, group in scored.groupby("predictor", sort=True)
-        if len(group)
-    ]
+    """Every Predictor in ``rows``, scored over the window twice, best raw RPS first.
+
+    Sorted on the pre-calibration RPS: that is the Predictor's own score, and ordering the board by
+    what the calibration layer did to it would let the layer decide who is winning.
+    """
+    scored = calibrated_predictions(rows, matches, seasons=seasons)
+    lines = [_line(str(name), group) for name, group in scored.groupby("predictor", sort=True)]
     board = pd.DataFrame(lines, columns=list(SCOREBOARD_COLUMNS))
     return board.sort_values("rps", kind="stable").reset_index(drop=True)
 
 
 def _line(predictor: str, group: pd.DataFrame) -> dict[str, object]:
-    """One Predictor's Scorecard as a scoreboard row.
+    """One Predictor's two Scorecards as a scoreboard row.
 
-    The Scorecard fields are spread rather than re-listed, so a metric added to
-    :class:`epl.metrics.Scorecard` reaches the scoreboard by being named in
-    :data:`SCOREBOARD_COLUMNS` and nowhere else.
+    Both sides go through :func:`_scores`, so the pre- and post-calibration halves cannot be
+    computed differently — which is the whole worth of reporting them side by side. ``fixtures`` is
+    dropped from the calibrated half because it is one slate scored twice; two counts would invite a
+    reader to wonder whether the halves cover the same Fixtures, which is the doubt one count
+    removes.
 
     The note is looked up by name rather than passed in, because scoring works from stored rows
     and a stored row carries only a name. A Predictor whose ledger file outlived its code scores
     exactly as before, with a blank where its caveat would be.
     """
-    card = metrics.score(
-        group[list(PROBABILITY_COLUMNS)].to_numpy(float), group["outcome"].tolist()
+    outcomes = group["outcome"].tolist()
+    before = _scores(group[list(PROBABILITY_COLUMNS)].to_numpy(float), outcomes)
+    after = _scores(group[list(CALIBRATED_PROBABILITY_COLUMNS)].to_numpy(float), outcomes)
+    return (
+        {"predictor": predictor}
+        | before
+        | {
+            f"{CALIBRATED_PREFIX}{name}": value
+            for name, value in after.items()
+            if name != "fixtures"
+        }
+        | {
+            "corrected": int(group["corrected"].sum()),
+            "correction": float(group["correction"].mean()),
+            "note": predictors.note(predictor),
+        }
     )
-    return {"predictor": predictor} | asdict(card) | {"note": predictors.note(predictor)}
+
+
+def _scores(predictions: object, outcomes: list[object]) -> dict[str, object]:
+    """Every metric the board carries, for one set of Predictions.
+
+    The Scorecard fields are spread rather than re-listed, so a metric added to
+    :class:`epl.metrics.Scorecard` reaches the file and both printed tables by being named in
+    :data:`METRICS` and nowhere else. The calibration error is added on top because it is the one
+    board metric that is not a Scorecard field — see :data:`METRICS`.
+    """
+    return asdict(metrics.score(predictions, outcomes)) | {
+        "ece": metrics.expected_calibration_error(predictions, outcomes)
+    }
+
+
+def reliability(
+    rows: pd.DataFrame,
+    matches: pd.DataFrame,
+    *,
+    seasons: Iterable[int] = EVALUATION_WINDOW,
+) -> pd.DataFrame:
+    """A :data:`epl.metrics.BINS`-bin reliability diagram per Predictor, in both forms.
+
+    Issue #10's fourth acceptance criterion, and the diagram behind the ``ece`` and
+    ``calibrated_ece`` columns on the scoreboard — the one number cannot say *where* a Predictor is
+    off, and a correction that fixed one band while breaking another would show up here first.
+
+    Predictors in name order, ``raw`` before ``calibrated`` within each, bins in ascending order.
+    """
+    scored = calibrated_predictions(rows, matches, seasons=seasons)
+    diagrams = [
+        metrics.reliability(
+            group[list(columns)].to_numpy(float), group["outcome"].tolist()
+        ).assign(predictor=str(name), form=form)
+        for name, group in scored.groupby("predictor", sort=True)
+        for form, columns in zip(
+            FORMS, (PROBABILITY_COLUMNS, CALIBRATED_PROBABILITY_COLUMNS), strict=True
+        )
+    ]
+    if not diagrams:
+        return pd.DataFrame(columns=list(RELIABILITY_REPORT_COLUMNS))
+    return pd.concat(diagrams, ignore_index=True)[list(RELIABILITY_REPORT_COLUMNS)]
 
 
 def write(board: pd.DataFrame) -> Path:
     """Write the scoreboard, and return where it went."""
-    destination = path()
+    return _publish(board, path())
+
+
+def reliability_path() -> Path:
+    """Where the published reliability diagrams live."""
+    return outputs_dir() / "reliability.csv"
+
+
+def write_reliability(diagrams: pd.DataFrame) -> Path:
+    """Write the reliability diagrams, and return where they went."""
+    return _publish(diagrams, reliability_path())
+
+
+def _publish(table: pd.DataFrame, destination: Path) -> Path:
+    """One writer for both reports, so the two cannot drift into different float formats."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    board.to_csv(destination, index=False, float_format=schema.FLOAT_FORMAT, lineterminator="\n")
+    table.to_csv(destination, index=False, float_format=schema.FLOAT_FORMAT, lineterminator="\n")
     return destination

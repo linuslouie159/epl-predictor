@@ -34,6 +34,13 @@ Do not "fix" these without reading the linked ADR first:
 - **The Market Line's stored rows say `inputs_seen = 0`** and carry no `latest_input`. Correct: it
   reads its odds off the Fixture, and a Predictor that consumes no history has no history to leak.
   Do not make it touch the corpus. A Pundit will record the same.
+- **The shared calibration layer makes every Predictor slightly worse**, and is kept anyway. All
+  four are already well calibrated, so a monotone map finds noise and charges ~0.001 RPS for it.
+  The headline numbers are therefore pre-calibration, both columns are published, and the finding
+  is the point. [ADR 0006](./docs/adr/0006-ordered-logit-with-shared-calibration.md)
+- **`epl.calibration` is at the top level, not in `epl.models`**, and older docstrings said
+  otherwise. It is not a model, and putting it there would make `epl.models` and `epl.ledger`
+  import each other. See docs/DECISIONS.md, "The shared calibration layer".
 - **Elo's fitted draw band is symmetric and the fit cannot move its centre**, and **Elo rebuilds
   its whole rating pool at every one of the 952 Prediction Rounds** rather than folding one
   forward. Both are explained in `src/epl/models/__init__.py`; the second costs a minute per
@@ -72,24 +79,62 @@ Line (`src/epl/benchmarks/market.py`), issue #8.
 **Stage 5 is built**: pyramid-wide Elo through an ordered logit (`src/epl/models/`, issue #9) — one
 rating pool across E0–E3 folded in kickoff order (`elo.py`), the mapping from one edge to three
 probabilities (`ordered_logit.py`), and the only place a hyperparameter may be fitted
-(`burn_in.py`). The scoreboard now reads:
+(`burn_in.py`).
+
+**Stage 6 is built**: the shared isotonic calibration layer (`src/epl/calibration.py`, issue #10) —
+one step, fitted walk-forward on out-of-sample Predictions only, applied to every Predictor through
+the contract by `epl.ledger.scoreboard`. Every metric is now reported twice. The scoreboard reads:
 
 ```
-     predictor  fixtures    rps  brier  log_loss  accuracy
-   market_line      7980 0.1936 0.5684    0.9582    0.5471
-  ceiling_line      2660 0.1968 0.5717    0.9639    0.5498
-           elo      7980 0.1994 0.5810    0.9771    0.5380
-naive_baseline      7980 0.2294 0.6430    1.0642    0.4556
+pre-calibration
+     predictor  fixtures    rps  brier  log_loss  accuracy    ece
+   market_line      7980 0.1936 0.5684    0.9582    0.5471 0.0061
+  ceiling_line      2660 0.1968 0.5717    0.9639    0.5498 0.0060
+           elo      7980 0.1994 0.5810    0.9771    0.5380 0.0055
+naive_baseline      7980 0.2294 0.6430    1.0642    0.4556 0.0061
+
+post-calibration
+     predictor  corrected    rps  brier  log_loss  accuracy    ece  correction
+   market_line       7600 0.1945 0.5707    0.9931    0.5427 0.0124      0.0342
+  ceiling_line       2280 0.1980 0.5755    0.9817    0.5445 0.0084      0.0328
+           elo       7600 0.2004 0.5836    1.0128    0.5353 0.0097      0.0307
+naive_baseline       7600 0.2309 0.6478    1.2269    0.4479 0.0161      0.0455
 ```
 
 `epl.pundits` and `epl.simulate` are still documented shells, each naming the issue that builds it.
+
+Four things about stage 6 worth knowing before building on it:
+
+- **Calibration makes every Predictor worse, and that is the deliverable.** It costs 0.0009–0.0015
+  RPS and moves 3–5% of every Prediction's mass. Two effects, separated by tests rather than
+  asserted: **knot resolution** (a knot per distinct quote, and Elo edges and market odds are nearly
+  continuous, so most knots rest on one Fixture — a ten-band fit recovers 73% of Elo's loss and 52%
+  of the market's) and **the corpus** (even coarse, both stay worse than raw; all four start at a
+  ten-bin calibration error of about 0.006, so there is little left to find). A split half of the
+  market's Fixtures says the same without the walk: the map improves the half it was fitted on by
+  0.0017 RPS and costs the later half 0.0005. Do not "fix" this by dropping the pre-calibration
+  column — it is the only reason the tax is visible. ADR 0006 has the table.
+- **The correction points the right way; the noise is bigger.** Elo's draw quote at even Supremacy
+  moves 30.2% → 29.3% against 27.6% observed, which is exactly the defect #9 handed the layer. So
+  the diagnosis is "well-calibrated inputs", not "wired up wrong", and a Predictor that genuinely
+  needs correcting — a Pundit scored as-stated, at issue #11 — should be measured again rather than
+  assumed to behave like these four.
+- **The layer stores nothing, and no forecast is ever calibrated.** A calibrated Prediction is a
+  function of a stored Prediction *and* of Outcomes that happened after it, so it is derived at
+  scoring time. No row in either store knows an Outcome, and that is what makes a leaked Prediction
+  distinguishable from a recorded one (ADR 0005). Do not add a `calibrated_*` column to the ledger.
+  The consequence matters at **issue #17**: a Prediction sealed for an unplayed Fixture is published
+  raw and gains a calibrated form only once its round has been scored.
+- **The first 380 Predictions of every track record are uncorrected**, because the map is fitted
+  out-of-sample only and there is nothing behind them. `corrected` on the scoreboard says how many
+  a fitted map reached; it is 7,600 of 7,980, not a bug.
 
 Four things about stage 5 worth knowing before building on it:
 
 - **Elo takes 0.030 of the 0.036 RPS the market takes out of the floor** — 84% of the available
   edge, from ratings alone. It is 0.0058 short of the market and 0.0008 above the README's ≤0.1986
-  target, which is what #10 and #13 are for. An Elo that *beat* the market would be a leak, and the
-  corpus test says so out loud.
+  target, which was what #10 and #13 were for — and after stage 6 it is #13 alone. An Elo that
+  *beat* the market would be a leak, and the corpus test says so out loud.
 - **`epl.models.burn_in` is the only place anything is fitted**, and it cuts the corpus to the
   Burn-In Window before it walks a single match — so handing it all 26 Seasons is indistinguishable
   from handing it the five. 2000/01 warms the ratings and is not fitted on; the fit is scored on
@@ -102,8 +147,9 @@ Four things about stage 5 worth knowing before building on it:
   boundary is not an optimum.
 - **Elo quotes draws slightly too often in every Supremacy bucket** — predicted 30.2%→14.5% against
   observed 27.6%→13.8%. That is frozen hyperparameters drifting exactly as ADR 0008 says they will,
-  and it is what issue #10's shared calibration layer is for. It is pinned by a test so it cannot
-  be quietly forgotten.
+  and it is what issue #10's shared calibration layer was for. Stage 6 built that layer, and it
+  moves the even end 30.2%→29.3% — correctly, and not far enough, at a net cost of 0.0009 RPS. Both
+  facts are pinned by tests so neither can be quietly forgotten.
 
 Four things about stage 4 worth knowing before building on it:
 
@@ -151,27 +197,18 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Issue #10 — the shared isotonic calibration layer.** #9 just handed it a reason to exist rather
-than a principle: Elo over-predicts draws in all ten Supremacy buckets, and the Market Line
-*under*-predicts them at the even end (28.6% quoted against 32.0% observed). Both are corrections a
-walk-forward isotonic step should make, and ADR 0006 puts the step in one place so Elo, Dixon-Coles,
-the Market Line and the Pundits all get identical treatment.
+**Issue #11 — the Pundits** is the other half of the three-way scoreboard, and stage 6 has just
+made it more interesting than it was. It will want `covers` and `note` from the contract stage 4
+added: a Pundit published in the Seasons they worked and no others, and a Pundit scored as-stated
+needs its caveat travelling with it. It is also the first Predictor the calibration layer has
+something real to correct — a published Scoreline read as `[1, 0, 0]` is the most miscalibrated
+Prediction there is (ADR 0003) — so the stage 6 finding should be re-measured there rather than
+assumed to hold, and the Calibrated Pundit's own map (issue #12) is a *different* thing from the
+shared layer and must not be collapsed into it.
 
-Two things it must not lose:
-
-- **Every metric is reported twice**, pre- and post-calibration (ADR 0006). A calibration layer can
-  mask a broken model by correcting its symptoms; reporting both is what makes a large correction
-  read as a warning rather than a silent fix.
-- **It is fitted walk-forward on out-of-sample Predictions only.** The ledger already holds them,
-  one row per Fixture per Predictor with an As-Of Instant on it, so the walk it needs is the walk
-  `backfill` already does.
-
-**Issue #11 — the Pundits** is also unblocked and is the other half of the three-way scoreboard.
-It will want `covers` and `note` from the contract stage 4 added: a Pundit published in the Seasons
-they worked and no others, and a Pundit scored as-stated needs its caveat travelling with it.
-
-**Issue #13 — Dixon-Coles** is the other way to close the 0.0058 gap to the market, and it is the
-one that unblocks the Season Projection (goal difference, ADR 0007).
+**Issue #13 — Dixon-Coles** is now the only remaining way to close the 0.0058 gap to the market,
+since the calibration layer turned out to cost rather than buy. It is also the one that unblocks
+the Season Projection (goal difference, ADR 0007).
 
 Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
 unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage
@@ -189,7 +226,8 @@ conda activate epl-predictor
 python -m epl.ingest fetch     # fill data/raw/ — 104 files, 26 Seasons x 4 tiers
 python -m epl.ingest build     # write matches.csv (52,672) + odds_availability.csv
 python -m epl.ledger backfill  # walk every registered Predictor over the Evaluation Window
-python -m epl.ledger scoreboard
+python -m epl.ledger scoreboard      # every metric twice, pre- and post-calibration
+python -m epl.ledger reliability     # the 10-bin diagrams per Predictor, in both forms
 python -m epl.ledger audit     # re-check both stores and the seal on outputs/live/
 python -m epl.benchmarks overround   # the margin in each book, per Season and tier
 python -m epl.benchmarks methods     # the three vig removals compared on one book

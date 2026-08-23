@@ -28,3 +28,54 @@ so Elo, Dixon-Coles, the Market Line and the Pundits all receive identical treat
 A calibration layer can mask a broken model by correcting its symptoms. To keep that visible rather
 than hidden, every metric is reported both pre-calibration and post-calibration; a large correction is
 then a warning sign about the underlying model rather than a silent fix.
+
+### Measured at stage 6 (issue #10): the warning pointed at the layer, not at a model
+
+The decision above stands and the layer is built (`epl.calibration`). What it does on this corpus is
+not what this ADR expected, and the double reporting is the only reason anyone would know.
+
+**The layer makes every Predictor worse.** Over the Evaluation Window, walk-forward:
+
+| Predictor | RPS | calibrated RPS | ten-bin error | calibrated | mass moved |
+|---|---|---|---|---|---|
+| Market Line | 0.19362 | 0.19450 | 0.0061 | 0.0124 | 0.034 |
+| Ceiling Line | 0.19676 | 0.19800 | 0.0060 | 0.0084 | 0.033 |
+| Elo | 0.19943 | 0.20037 | 0.0055 | 0.0097 | 0.031 |
+| Naive Baseline | 0.22938 | 0.23087 | 0.0061 | 0.0161 | 0.046 |
+
+It moves 3% to 5% of each Prediction's probability mass and charges 0.0009 to 0.0015 RPS for it. Two
+things are behind that, and the second does not cancel the first:
+
+**Knot resolution.** An isotonic map gets a knot per distinct quote, and market odds and Elo edges
+are nearly continuous — 7,909 distinct Home quotes across 7,980 Fixtures — so most knots rest on a
+single Fixture and the map fits noise. Cutting the knots at ten equal-width probability bands
+instead recovers most of the loss: Elo 0.20037 → 0.19968, the Market Line 0.19450 → 0.19404. That
+variant is *not* shipped, because the band count would be a hyperparameter and ADR 0008 wants those
+fitted inside a Burn-In Window that holds no stored Prediction. It is measured and pinned by
+`tests/test_calibration_over_the_corpus.py` so the claim above does not rest on prose.
+
+**The corpus.** Even coarse, both stay worse than raw. All four sit at a pooled ten-bin error around
+0.006 before the layer touches them, so there is little real miscalibration left for a monotone map
+to find. A clean split-half over the market's 7,980 Fixtures shows the same without any of the
+walk's machinery: fitted on the older half by kickoff, the map improves that half by 0.0017 RPS and
+costs the later half 0.0005.
+
+At full resolution the layer also leaves every Predictor *less* calibrated than it found it, which
+rules out "the correction is right and RPS is judging it unfairly".
+
+It is not that the correction points the wrong way. Elo's draw quote at even Supremacy moves 30.2%
+→ 29.3% against 27.6% observed, exactly the defect issue #9 handed this layer as its reason to
+exist. The correction is real and small; the noise around it is larger.
+
+Three things follow, and none of them changes the decision:
+
+- **The headline numbers stay pre-calibration.** The README's ≤0.1986 target is measured against a
+  Predictor's own output, because that is the better of the two and calling the worse one the answer
+  would be a fiction in the opposite direction from the usual one.
+- **Both columns are published anyway.** A 0.001 RPS tax applied silently to every Predictor is
+  precisely what this section was written to prevent, and it took the pre-calibration column to see
+  it. The layer earning its place by reporting a null result is still the layer earning its place.
+- **It is worth re-reading when a Predictor arrives that needs it.** A Pundit scored as-stated
+  (ADR 0003) publishes `[1, 0, 0]`, which is the most miscalibrated Prediction there is. Issue #11
+  is where this layer has something real to correct, and where these numbers should be measured
+  again rather than assumed to hold.

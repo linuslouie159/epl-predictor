@@ -1,10 +1,12 @@
 """Calibration measured: the reliability diagram and its one-number summary.
 
-This module *measures* calibration. It does not correct it — the shared isotonic calibration layer
-every Predictor's output passes through is a modelling step and lives in ``epl.models`` (issue
-#10). Keeping the two apart is what lets every metric be reported twice, pre-calibration and
-post-calibration, so a large correction reads as a warning about the underlying model rather than
-a silent fix (spec, user story 22).
+This module *measures* calibration. It does not correct it — the shared isotonic layer every
+Predictor's output passes through produces Predictions, so it sits outside this package entirely
+(:mod:`epl.calibration`, issue #10). Keeping the two apart is what lets every metric be reported
+twice, pre-calibration and post-calibration, so a large correction reads as a warning rather than
+a silent fix (spec, user story 22). It is also what keeps the promise this package rests on: no
+function in here *produces* a Prediction, and the package imports nothing that can, which
+``tests/metrics/test_module_contract.py`` asserts structurally.
 
 The diagram pools all three Outcomes of every Prediction. A Prediction of (0.5, 0.3, 0.2)
 contributes three points, and the question the pooled diagram answers is the one worth asking:

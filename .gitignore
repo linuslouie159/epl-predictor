@@ -45,3 +45,7 @@ Thumbs.db
 # reason — it is the vig removal's receipt, re-derivable at any time, not a record of a claim.
 outputs/scoreboard.csv
 outputs/overround.csv
+
+# The reliability diagrams `python -m epl.ledger reliability` publishes are the scoreboard at bin
+# resolution — same source, same regenerability, same reasoning.
+outputs/reliability.csv

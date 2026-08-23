@@ -28,8 +28,12 @@ The system does **not** need to beat the market. It needs to be leak-free, well 
 within a stated distance of the market while beating the Naive Baseline and the Pundits.
 
 Elo alone takes **0.030 of the 0.036 RPS** the market takes out of the floor — 84% of the available
-edge from ratings and nothing else. The 0.0008 it still sits above the target is what the shared
-calibration layer and Dixon-Coles are for.
+edge from ratings and nothing else. The 0.0008 it still sits above the target now rests on
+Dixon-Coles alone: the shared calibration layer is built and measured, and it makes every Predictor
+on this board slightly *worse* (see [Calibration](#calibration)).
+
+Every number above is pre-calibration, which is the better of the two columns the scoreboard
+publishes and the one a Predictor earned.
 
 ## The one rule
 
@@ -90,10 +94,11 @@ data/processed/         cleaned tables
 src/epl/windows.py      Season identity, Burn-In and Evaluation Windows
 src/epl/rounds.py       the As-Of Instant rule and Prediction Rounds
 src/epl/predictors.py   the Predictor contract, the Evidence a Predictor sees, the registry
+src/epl/calibration.py  the shared isotonic layer every Predictor's output passes through
 src/epl/ingest/         football-data, pundit scrapers
 src/epl/clubs/          canonical Club table + Alias resolution
-src/epl/metrics/        RPS, Brier, log loss, calibration
-src/epl/models/         elo.py, ordered_logit.py, burn_in.py; dixon-coles and the calibration layer
+src/epl/metrics/        RPS, Brier, log loss, calibration measured
+src/epl/models/         elo.py, ordered_logit.py, burn_in.py; dixon-coles
 src/epl/benchmarks/     market line + ceiling line (vig.py), naive baseline
 outputs/overround.csv   the margin in each book per Season; regenerable, gitignored
 src/epl/pundits/        grading + Calibrated Pundit
@@ -102,7 +107,12 @@ src/epl/ledger/         Prediction stores, the row audit, the scoreboard
 outputs/backtest/       regenerable, gitignored — one file per Predictor
 outputs/live/           SEALED, committed, append-only — one file per Prediction Round
 outputs/scoreboard.csv  every Predictor over the Evaluation Window; regenerable, gitignored
+outputs/reliability.csv 10-bin diagrams per Predictor, raw and calibrated; regenerable, gitignored
 ```
+
+`calibration.py` sits beside the contract it wraps rather than inside `models/`, because it is not a
+model: it takes Predictions and returns Predictions, and it treats the Market Line and a Pundit
+exactly as it treats Elo.
 
 ## Environment
 
@@ -226,7 +236,8 @@ the rest of the row would deliver the answer sheet in the same call as the quest
 
 ```
 python -m epl.ledger backfill      # walk every registered Predictor over the Evaluation Window
-python -m epl.ledger scoreboard    # score both stores; write outputs/scoreboard.csv
+python -m epl.ledger scoreboard    # score both stores twice; write outputs/scoreboard.csv
+python -m epl.ledger reliability   # the 10-bin diagrams, raw and calibrated
 python -m epl.ledger audit         # re-check every stored row, and the seal on outputs/live/
 ```
 
@@ -306,3 +317,59 @@ indistinguishable from handing it the five (ADR 0008). 2000/01 warms the ratings
 on. What it found — K 28.5, home advantage 80 rating points, a logit scale of 186.9 and a draw band
 of ±0.6232 — is frozen as literals in `models/elo.py`, and `python -m epl.models fit` prints the
 fit beside them so the two cannot drift apart in silence.
+
+## Calibration
+
+One shared isotonic step wraps every Predictor identically — Elo, both market lines, the Naive
+Baseline and, later, the Pundits. A Predictor gets it by being registered; there is no calibration
+code in any Predictor and nowhere for a per-Predictor branch to be added (ADR 0006).
+
+It is fitted **walk-forward on out-of-sample Predictions only**. At each Prediction Round the map is
+built from the Predictions whose Fixtures kicked off *strictly before* that round's As-Of Instant —
+the same cut `Evidence` applies to the corpus, because an Outcome is not knowable until its Fixture
+has been played. This is the one thing in the project fitted on results, so it is the one place a
+leak could enter with every stored row still auditing clean.
+
+A map needs **380 Predictions** behind it — one Season of Fixtures — before it is fitted at all, so
+the first 380 of every track record pass through uncorrected. That is what "out-of-sample only"
+costs, and the scoreboard's `corrected` column reports it rather than hiding it: 7,600 of 7,980.
+
+**Every metric is reported twice**, pre-calibration and post-calibration, with the size of the
+correction beside them. That rule is why this section can tell you something inconvenient:
+
+| Predictor | RPS | calibrated | ten-bin error | calibrated | mass moved |
+|---|---|---|---|---|---|
+| Market Line | 0.19362 | 0.19450 | 0.0061 | 0.0124 | 0.034 |
+| Ceiling Line | 0.19676 | 0.19800 | 0.0060 | 0.0084 | 0.033 |
+| Elo | 0.19943 | 0.20037 | 0.0055 | 0.0097 | 0.031 |
+| Naive Baseline | 0.22938 | 0.23087 | 0.0061 | 0.0161 | 0.046 |
+
+**Calibration makes every Predictor worse**, by about 0.001 RPS, moving 3–5% of each Prediction's
+probability mass to do it. Two things are behind that:
+
+- **Knot resolution.** A map gets a knot per distinct quote, and market odds and Elo edges are
+  nearly continuous — 7,909 distinct Home quotes across 7,980 Fixtures — so most knots rest on one
+  Fixture and the map fits noise. Cutting the knots at ten probability bands recovers most of the
+  loss (Elo 0.20037 → 0.19968, market 0.19450 → 0.19404). Not shipped: the band count would be a
+  hyperparameter, and those are fitted in the Burn-In Window, which holds no stored Prediction.
+- **The corpus.** Even coarse, both stay worse than raw. All four are already well calibrated, so
+  there is little real miscalibration left to find. A clean split half says the same without the
+  walk: fitted on the older half of the market's Fixtures, the map improves that half by 0.0017 RPS
+  and costs the later half 0.0005.
+
+The correction is not pointing the wrong way — Elo's draw quote at even Supremacy moves 30.2% →
+29.3% against 27.6% observed, exactly the defect it was built for. The noise around it is simply
+larger than the signal. So the headline numbers stay pre-calibration, and both columns keep being
+published: a 0.001 RPS tax applied silently to every Predictor is precisely what reporting twice
+exists to catch.
+
+```
+python -m epl.ledger scoreboard    # both tables, and the correction beside the second
+python -m epl.ledger reliability   # 10 bins per Predictor per form; outputs/reliability.csv
+python -m epl.models draws         # the draw curve, quoted and calibrated, against observed
+```
+
+Nothing is stored. A calibrated Prediction is a function of a stored Prediction *and of Outcomes
+that happened after it*, so it is derived at scoring time — no row in either ledger store knows an
+Outcome, and that is what makes a leaked Prediction distinguishable from a recorded one
+([ADR 0005](./docs/adr/0005-split-prediction-ledger.md)).

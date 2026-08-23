@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from epl import metrics
 from epl.ledger import __main__ as cli
 from epl.ledger import backtest, scoreboard
 from epl.paths import backtest_dir, processed_dir
@@ -72,6 +73,43 @@ class TestScoreboard:
         assert set(board["predictor"]) == written
         assert board.loc[board["predictor"] == "naive_baseline", "fixtures"].tolist() == [3]
         assert "rps" in capsys.readouterr().out
+
+    def test_it_prints_the_metrics_twice(
+        self, corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """ADR 0006: a large correction has to read as a warning about the model rather than as a
+        silent fix, which it cannot do if only the corrected column is published."""
+        cli.main(["backfill"])
+
+        assert cli.main(["scoreboard"]) == 0
+
+        printed = capsys.readouterr().out
+        assert "pre-calibration" in printed
+        assert "post-calibration" in printed
+        assert "correction" in printed
+
+
+class TestReliability:
+    def test_it_publishes_a_diagram_per_predictor_in_both_forms(
+        self, corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        cli.main(["backfill"])
+
+        assert cli.main(["reliability"]) == 0
+
+        published = pd.read_csv(scoreboard.reliability_path())
+        stored = {path.stem for path in backtest_dir().glob("*.csv")}
+        assert set(published["predictor"]) == stored
+        assert len(published) == len(stored) * len(scoreboard.FORMS) * metrics.BINS
+        assert "(calibrated)" in capsys.readouterr().out
+
+    def test_an_empty_store_says_so_rather_than_publishing_nothing(
+        self, corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert cli.main(["reliability"]) == 0
+
+        assert "backfill" in capsys.readouterr().out
+        assert not scoreboard.reliability_path().exists()
 
 
 class TestScoreboardCompleteness:

@@ -92,24 +92,38 @@ def _fit(matches_path: Path | None) -> int:
 
 
 def _draws(matches_path: Path | None, predictor: str | None) -> int:
-    rows = scoreboard.scored_predictions(backtest.read(predictor), match_table(matches_path))
+    """The curve raw, and the curve after the shared calibration layer.
+
+    Both, because the layer exists precisely to correct this: #9 measured Elo quoting draws too
+    often in all ten buckets and the Market Line quoting them too rarely at the even end, and #10
+    is what was meant to fix it. A curve printed only post-calibration would hide whether the layer
+    did anything; one printed only pre-calibration would hide whether it broke something.
+    """
+    rows = scoreboard.calibrated_predictions(
+        backtest.read(predictor), match_table(matches_path)
+    )
     if rows.empty:
         print("no stored Predictions — run `python -m epl.ledger backfill`")
         return 0
 
     for name, group in rows.groupby("predictor", sort=True):
-        predictions = group[list(scoreboard.PROBABILITY_COLUMNS)].to_numpy(float)
-        curve = draw_curve(predictions, group["outcome"].to_numpy(dtype=object))
+        outcomes = group["outcome"].to_numpy(dtype=object)
+        raw = draw_curve(group[list(scoreboard.PROBABILITY_COLUMNS)].to_numpy(float), outcomes)
+        calibrated = draw_curve(
+            group[list(scoreboard.CALIBRATED_PROBABILITY_COLUMNS)].to_numpy(float), outcomes
+        )
+
         print(f"\n{name}: {len(group)} Fixtures")
-        print(
-            curve.to_string(index=False, float_format=lambda value: f"{value:.4f}")
-        )
-        print(
-            f"  predicted {curve['predicted_draw'].iloc[0]:.3f} -> "
-            f"{curve['predicted_draw'].iloc[-1]:.3f}, "
-            f"observed {curve['observed_draw'].iloc[0]:.3f} -> "
-            f"{curve['observed_draw'].iloc[-1]:.3f}"
-        )
+        print(raw.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+        # The observed column is read off the raw curve on purpose: calibration moves Fixtures
+        # between Supremacy buckets, so the two curves are cut differently and only one of them
+        # can be the answer to "and how often was it actually a Draw".
+        for label, curve, column in (
+            ("predicted", raw, "predicted_draw"),
+            ("calibrated", calibrated, "predicted_draw"),
+            ("observed", raw, "observed_draw"),
+        ):
+            print(f"  {label:<11} {curve[column].iloc[0]:.3f} -> {curve[column].iloc[-1]:.3f}")
     return 0
 
 

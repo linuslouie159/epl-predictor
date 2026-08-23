@@ -19,10 +19,11 @@ Outcomes and nothing else, and ``tests/metrics/test_module_contract.py`` asserts
 the package imports no module capable of producing a Prediction. That is what makes the three-way
 scoreboard incapable of being apples-to-oranges rather than merely intended not to be.
 
-:mod:`epl.metrics.calibration` *measures* calibration. Correcting it is a modelling step and lives
-in :mod:`epl.models` (issue #10), which is what lets every metric be emitted twice, pre- and
-post-calibration, so a large correction reads as a warning about the underlying model rather than
-a silent fix.
+:mod:`epl.metrics.calibration` *measures* calibration. Correcting it produces Predictions, so it
+lives outside this package in :mod:`epl.calibration` (issue #10) — which is both what keeps the
+promise above and what lets every metric be emitted twice, pre- and post-calibration, so a large
+correction reads as a warning rather than a silent fix. Functions here take Predictions, of course;
+what none of them does is make one.
 
     >>> from epl import metrics
     >>> metrics.rps([0.5, 0.3, 0.2], "H")

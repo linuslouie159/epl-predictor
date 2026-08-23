@@ -26,8 +26,15 @@ MODULES = (
 #: Single-file modules that every stage imports rather than a stage of their own: three scope which
 #: data a Prediction may see, one owns the on-disk layout. Ticket 5 puts Prediction Rounds here,
 #: beside the Windows; ticket 7 puts the Predictor contract here for the same reason — every stage
-#: from Elo onward implements it, and it belongs inside none of them.
-FOUNDATIONS = ("epl.windows", "epl.rounds", "epl.paths", "epl.predictors")
+#: from Elo onward implements it, and it belongs inside none of them. Ticket 10 puts the shared
+#: calibration layer here too: it wraps every Predictor, so it belongs to none of them either.
+FOUNDATIONS = (
+    "epl.windows",
+    "epl.rounds",
+    "epl.paths",
+    "epl.predictors",
+    "epl.calibration",
+)
 
 #: The modules that are still documented shells. Each is removed from here as its stage is built:
 #: ingest and clubs by tickets 2-4, metrics by ticket 6, the ledger and the Naive Baseline half of

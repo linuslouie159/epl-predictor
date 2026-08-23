@@ -3,6 +3,12 @@
 Built at stage 3 (issue #7). `schema` holds the one row schema and its audits, `backtest` the
 regenerable store, `live` the sealed one, and `scoreboard` the scoring over both.
 
+At stage 6 (issue #10) `scoreboard` also became where the shared calibration layer is applied. It
+belongs here rather than in any Predictor because it is fitted on Outcomes, and the Predictions it
+is fitted on are what these stores hold — but nothing calibrated is ever *written* to a store. A
+calibrated Prediction is a function of a stored Prediction and of Outcomes that happened after it,
+and no row in either store may know an Outcome (see below).
+
 Two stores for one kind of record looks like duplication, so the reason is worth restating here
 (ADR 0005). A Backtest Prediction is reproducible — rerun the pipeline and it comes back identical —
 so storing it is a convenience. A Sealed Prediction is evidence, and evidence that can be silently
@@ -39,16 +45,23 @@ from epl.ledger.schema import (
     check,
     predictions_for,
 )
-from epl.ledger.scoreboard import SCOREBOARD_COLUMNS, scored_predictions
+from epl.ledger.scoreboard import (
+    RELIABILITY_REPORT_COLUMNS,
+    SCOREBOARD_COLUMNS,
+    calibrated_predictions,
+    scored_predictions,
+)
 
 __all__ = [
     "DTYPES",
     "FIXTURE_KEY",
     "LEDGER_COLUMNS",
+    "RELIABILITY_REPORT_COLUMNS",
     "SCOREBOARD_COLUMNS",
     "LedgerError",
     "audit",
     "backtest",
+    "calibrated_predictions",
     "check",
     "live",
     "predictions_for",

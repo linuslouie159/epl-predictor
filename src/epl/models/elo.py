@@ -27,8 +27,10 @@ Three things this deliberately does not do:
   one scale by construction, because rating points only ever move between Clubs, so a tier's level
   is already expressed by the Clubs promoted into and relegated out of it. That is an argument
   rather than a measurement, and it is the reason nothing here fits an offset.
-* **No calibration.** That is one shared step across every Predictor and belongs to issue #10
-  (ADR 0006), which is what lets every metric be reported pre- and post-calibration.
+* **No calibration.** That is one shared step across every Predictor and lives in
+  :mod:`epl.calibration` (ADR 0006, issue #10), which is what lets every metric be reported pre-
+  and post-calibration. Measured over the Evaluation Window it costs Elo 0.0009 RPS rather than
+  buying any, so what this module emits is also what the scoreboard's headline is read off.
 
 The hyperparameters are fitted inside the Burn-In Window and frozen (ADR 0008). See
 :data:`FROZEN_SETTINGS`.
