@@ -214,9 +214,10 @@ def _three_way(matches_path: Path | None) -> int:
     print("\nthe cost of stating certainty — the same calls, read two ways (ADR 0003)")
     print(_table(costs.drop(columns=["slate"])))
     print(
-        "  cost_of_certainty is the as-stated RPS less the calibrated one: what being asked for a "
+        "  cost_of_certainty is the as-stated RPS less the margin map's: what being asked for a "
         "\n  Scoreline instead of a probability charged the forecaster. Neither reading is a trick "
-        "\n  and neither may be published alone."
+        "\n  and neither may be published alone. Both are pre-calibration, and the same "
+        "\n  subtraction over the calibrated rows would measure something else entirely."
     )
     for name, table in (("three_way", boards), ("certainty", costs)):
         print(f"-> {report.write(table, name)}")
@@ -233,12 +234,13 @@ def _three_way(matches_path: Path | None) -> int:
 def _calls(matches_path: Path | None) -> int:
     """Each Pundit's best and worst calls by the miss their fair reading still had."""
     scored = _scored(matches_path)
-    ranked = report.ranked_calls(scored, dataset.load())
+    calls = dataset.load()
+    ranked = report.ranked_calls(scored, calls)
     if ranked.empty:
         return _no_predictions()
 
-    for pundit, calls in ranked.groupby("pundit", sort=True):
-        ordered = calls.sort_values("miss", kind="stable")
+    for pundit, mine in ranked.groupby("pundit", sort=True):
+        ordered = mine.sort_values("miss", kind="stable")
         print(f"\n{pundit}: the {SHOWN} calls their map read best")
         print(_table(ordered.head(SHOWN).drop(columns=["pundit"]), places=3))
         print(f"\n{pundit}: the {SHOWN} it read worst")
@@ -247,8 +249,29 @@ def _calls(matches_path: Path | None) -> int:
         "\n  miss is the RPS of the fair reading — what the call was still wrong by once the "
         "\n  Scoreline had been read as what such a call is worth (spec, user story 34)"
     )
+    _report_unranked(ranked, calls)
     print(f"-> {report.write(ranked, 'pundit_calls')}")
     return 0
+
+
+def _report_unranked(ranked: pd.DataFrame, calls: pd.DataFrame) -> None:
+    """The calls that are not on the list at all, and why.
+
+    A call with no map behind it has no miss, so it can be neither a best call nor a worst one —
+    which means a genuinely awful opening call cannot appear here however bad it was. That is
+    :data:`epl.pundits.margin.MINIMUM_SAMPLE` showing, and it is said out loud for the reason
+    ``build`` names the Fixtures nobody called: an unremarked gap is how forty quietly becomes
+    four hundred.
+    """
+    published = calls.groupby("pundit").size()
+    on_the_list = ranked.groupby("pundit").size()
+    for pundit, total in published.items():
+        missing = int(total) - int(on_the_list.get(pundit, 0))
+        if missing:
+            print(
+                f"  {pundit}: {missing} of {int(total)} calls are not ranked — the opening ones, "
+                "which no map had a sample behind yet"
+            )
 
 
 def _map(matches_path: Path | None) -> int:

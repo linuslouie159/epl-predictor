@@ -26,9 +26,9 @@ post-calibration half of a board. The Fixtures are identical and the metrics are
 a Pundit's slate begins the market and Elo are thousands of Predictions into their records while
 the Pundit's has barely started. So some of the two Pundit rows are raw pass-through where none of
 the market's are. That is the honest arrangement — the alternative is refitting the market's map on
-a Pundit's Fixtures — but it means ``calibrated_rps`` compares differently-corrected Predictions
-over the same Fixtures, and the command line says so under the table rather than leaving it in a
-column. An unread caveat is the Ceiling Line's whole lesson (ADR 0001).
+a Pundit's Fixtures — but it means the board's ``calibrated_rps`` compares differently-corrected
+Predictions over the same Fixtures, and the command line says so under the table rather than
+leaving it in a column. An unread caveat is the Ceiling Line's whole lesson (ADR 0001).
 
 ## What "the cost of stating certainty" is
 
@@ -40,6 +40,17 @@ instead of a probability, and ADR 0003 is the argument that publishing either al
 
 It is published as its own file with the gap in a column called ``cost_of_certainty``, rather than
 left for a reader to subtract two rows and guess what the difference means.
+
+**That gap is pre-calibration only, and deliberately has no post-calibration twin.** Everywhere else
+in this project a metric appears twice (ADR 0006), so the absence needs a reason rather than a
+shrug. Subtracting the two *calibrated* rows gives about 0.02 rather than 0.12 — but that number is
+not a smaller measurement of the same thing, it is a measurement of something else. The shared
+isotonic layer has already taken the as-stated row from 0.334 to 0.235 by removing most of the
+certainty itself, so the remaining gap is "what stating certainty costs after a layer has stopped
+you stating it", which is a quantity nobody wants and which reads as though the headline were
+wrong by a factor of six. Publishing it under the name ``cost_of_certainty`` would be the one
+genuinely misleading number this stage could ship. Both calibrated RPS values are on the three-way
+board for anyone who wants them; what is refused here is the *subtraction*.
 
 ## Plain files, no presentation logic
 
@@ -85,16 +96,24 @@ OPPONENTS: tuple[str, ...] = ("elo", "market_line", "naive_baseline")
 THREE_WAY_COLUMNS: tuple[str, ...] = ("slate", *scoreboard.SCOREBOARD_COLUMNS)
 
 #: Canonical column order for the cost of stating certainty.
+#:
+#: The fair half is called ``margin_map`` rather than ``calibrated``, which is what CONTEXT.md's
+#: term for the Predictor would suggest, because ``calibrated_`` already means something else two
+#: files away: on the scoreboard it is :data:`epl.ledger.scoreboard.CALIBRATED_PREFIX`, the
+#: **post-shared-isotonic-layer** form of a metric (ADR 0006). A reader with `certainty.csv` and
+#: `three_way.csv` open together would find one prefix meaning two things, and the two are exactly
+#: the pair this stage spends its docstrings keeping apart. Naming these after the Predictor they
+#: hold — `margin_map_lawrenson`, `margin_map_sutton` — cannot be read either way.
 CERTAINTY_COLUMNS: tuple[str, ...] = (
     "slate",
     "as_stated",
-    "calibrated",
+    "margin_map",
     "fixtures",
     "as_stated_rps",
-    "calibrated_rps",
+    "margin_map_rps",
     "cost_of_certainty",
     "as_stated_accuracy",
-    "calibrated_accuracy",
+    "margin_map_accuracy",
 )
 
 #: Canonical column order for one call ranked by its miss.
@@ -201,6 +220,10 @@ def certainty(
     about a number that appears in both. ``cost_of_certainty`` is the as-stated RPS minus the
     calibrated one: positive means the format of the question was charged to the forecaster.
 
+    Both are the **pre-calibration** RPS, and there is no post-calibration column here on purpose.
+    See this module's docstring: the same subtraction over the calibrated rows measures a different
+    thing and reads as though this one were wrong. Do not add it.
+
     Accuracy is carried too, and it is not a formality. It is the one metric on which the as-stated
     reading is *not* obviously unfair — it asks only who they picked — so the pair of columns says
     whether the map is finding real information or merely padding a one-hot into a distribution.
@@ -223,17 +246,17 @@ def _certainty_line(
     if stated.empty or fair.empty:
         return None
 
-    as_stated, calibrated = stated.iloc[0], fair.iloc[0]
+    literal, mapped = stated.iloc[0], fair.iloc[0]
     return {
         "slate": pundit.pundit.name,
         "as_stated": pundit.pundit.name,
-        "calibrated": pundit.name,
-        "fixtures": int(as_stated["fixtures"]),
-        "as_stated_rps": float(as_stated["rps"]),
-        "calibrated_rps": float(calibrated["rps"]),
-        "cost_of_certainty": float(as_stated["rps"]) - float(calibrated["rps"]),
-        "as_stated_accuracy": float(as_stated["accuracy"]),
-        "calibrated_accuracy": float(calibrated["accuracy"]),
+        "margin_map": pundit.name,
+        "fixtures": int(literal["fixtures"]),
+        "as_stated_rps": float(literal["rps"]),
+        "margin_map_rps": float(mapped["rps"]),
+        "cost_of_certainty": float(literal["rps"]) - float(mapped["rps"]),
+        "as_stated_accuracy": float(literal["accuracy"]),
+        "margin_map_accuracy": float(mapped["accuracy"]),
     }
 
 

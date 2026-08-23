@@ -113,7 +113,7 @@ def _board(scored: pd.DataFrame, pundit: str) -> pd.DataFrame:
 
 class TestWhatTheMarginMapIsWorth:
     @pytest.mark.parametrize("pundit", sorted(CALIBRATED))
-    def test_the_calibrated_rps_is_what_the_docs_quote(
+    def test_the_margin_maps_rps_is_what_the_docs_quote(
         self, pundit: str, scored: pd.DataFrame
     ) -> None:
         board = _board(scored, pundit)
@@ -184,7 +184,7 @@ class TestTheCostOfStatingCertainty:
         fair = MARGIN_MAP_LAWRENSON if pundit == "lawrenson" else MARGIN_MAP_SUTTON
         (line,) = report.certainty(report.boards(scored, [fair]), [fair]).to_dict("records")
 
-        assert abs(line["calibrated_accuracy"] - line["as_stated_accuracy"]) < 0.01
+        assert abs(line["margin_map_accuracy"] - line["as_stated_accuracy"]) < 0.01
         assert line["cost_of_certainty"] > 0.11
 
 

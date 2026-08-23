@@ -212,7 +212,7 @@ class TestTheCostOfStatingCertainty:
         ).to_dict("records")
 
         assert line["as_stated_rps"] == 1.0
-        assert line["calibrated_rps"] == 0.145
+        assert line["margin_map_rps"] == 0.145
         assert line["cost_of_certainty"] == pytest.approx(0.855)
 
     def test_it_names_both_readings_so_neither_can_be_published_alone(
@@ -225,7 +225,7 @@ class TestTheCostOfStatingCertainty:
         ).to_dict("records")
 
         assert line["as_stated"] == "lawrenson"
-        assert line["calibrated"] == "margin_map_lawrenson"
+        assert line["margin_map"] == "margin_map_lawrenson"
         assert line["slate"] == "lawrenson"
 
     def test_accuracy_rides_along_beside_rps(self, make_scored) -> None:
@@ -238,7 +238,22 @@ class TestTheCostOfStatingCertainty:
         ).to_dict("records")
 
         assert "as_stated_accuracy" in line
-        assert "calibrated_accuracy" in line
+        assert "margin_map_accuracy" in line
+
+    def test_the_gap_is_published_pre_calibration_only(self, make_scored) -> None:
+        """Deliberately, and against this project's report-everything-twice rule (ADR 0006). The
+        same subtraction over the calibrated rows measures something else — what stating certainty
+        costs after a layer has already stopped you stating it — and would read as though the
+        headline were wrong by a factor of six. Both calibrated RPS values are on the three-way
+        board for anyone who wants them; it is the subtraction that is refused."""
+        pundit = a_calibrated_pundit()
+
+        columns = report.certainty(
+            report.boards(make_scored(*everyone_on("chelsea")), [pundit]), [pundit]
+        ).columns
+
+        assert "cost_of_certainty" in columns
+        assert not [name for name in columns if name.startswith(scoreboard.CALIBRATED_PREFIX)]
 
     def test_a_slate_with_no_pundit_rows_produces_no_line(self, make_scored) -> None:
         """Rather than a row of NaNs, which reads as a real measurement."""

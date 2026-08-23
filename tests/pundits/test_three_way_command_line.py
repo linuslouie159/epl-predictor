@@ -236,6 +236,18 @@ class TestTheRankedCalls:
 
         assert "miss is the RPS of the fair reading" in capsys.readouterr().out
 
+    def test_the_calls_that_are_not_ranked_at_all_are_counted(
+        self, published: CalibratedPundit, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A call with no map behind it has no miss, so a genuinely awful opening call cannot
+        appear among the worst however bad it was. Said out loud for the reason `build` names the
+        Fixtures nobody called: an unremarked gap is how forty quietly becomes four hundred."""
+        cli.main(["calls"])
+
+        printed = capsys.readouterr().out
+        assert f"{MINIMUM} of {FIXTURES} calls are not ranked" in printed
+        assert "no map had a sample behind yet" in printed
+
     def test_an_empty_ledger_says_so(
         self, unpublished: None, capsys: pytest.CaptureFixture[str]
     ) -> None:
