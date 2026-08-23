@@ -1,6 +1,6 @@
 """Pundits: the backfill, the two gradings, and the Pundits registered as Predictors.
 
-Built by issue #11. Issue #12 adds the Calibrated Pundit and issue #16 the BBC live spike.
+Built by issues #11 and #12. Issue #16 adds the BBC live spike.
 
 A Pundit publishes a Scoreline, not a distribution. Scoring that as `[1, 0, 0]` charges 1.00 RPS for
 calling Home when Away happens — punishing a claim of certainty the Pundit never made, and putting
@@ -8,11 +8,11 @@ them at ~0.36 against a market at ~0.19 in a gap that mostly measures the format
 That would fail this project's own honesty bar.
 
 So two distinct Predictors are registered per Pundit (ADR 0003). **Pundit** is the raw Scoreline
-scored as-stated, and is built here. **Calibrated Pundit** maps the Scoreline — bucketed by
-predicted goal margin, since a 3-0 call is a stronger claim than 2-1 — onto the Outcome frequencies
-that call has historically produced, fitted walk-forward on past calls only, and is issue #12. The
-headline three-way comparison uses the calibrated form; the as-stated number is published beside it
-as the cost of stating certainty.
+scored as-stated. **Calibrated Pundit** maps the Scoreline — bucketed by predicted goal margin,
+since a 3-0 call is a stronger claim than 2-1 — onto the Outcome frequencies that call has
+historically produced, fitted walk-forward on past calls only. The headline three-way comparison
+uses the calibrated form; the as-stated number is published beside it as the cost of stating
+certainty, which measures 0.1209 RPS for Lawrenson and 0.1235 for Sutton.
 
 **Calibrated Pundit is a one-feature model, not a person.** It may beat our own models, which is a
 real finding about the information in pundit calls — but it must never be presented as "Sutton beat
@@ -26,14 +26,26 @@ attribute BBC as the origin. `predictions.csv` beside this module is that datase
 committed so the accountability feature is backtestable on day one rather than in a year, and so a
 scoreboard run does not depend on nine pages of someone else's HTML still being up.
 
-Four modules:
+Seven modules:
 
 * :mod:`epl.pundits.myfootballfacts` — the nine archive pages, fetched and parsed
 * :mod:`epl.pundits.dataset` — resolved to Clubs, reconciled with the corpus, and frozen
 * :mod:`epl.pundits.grading` — the exact-score and correct-Outcome readings
 * :mod:`epl.pundits.predictor` — the two Pundits, registered and scored as-stated
+* :mod:`epl.pundits.margin` — the margin map: what a call of a given margin has been worth
+* :mod:`epl.pundits.calibrated` — the two Calibrated Pundits, registered over that map
+* :mod:`epl.pundits.report` — the three-way board, the certainty gap, the calls by miss
+
+:mod:`epl.pundits.report` is deliberately **not** imported here. It reports over
+:mod:`epl.ledger`, which imports this package to register its Predictors; keeping it out of the
+package's own imports is what stops that from being a loop. The command line imports it directly.
 """
 
+from epl.pundits.calibrated import (
+    MARGIN_MAP_LAWRENSON,
+    MARGIN_MAP_SUTTON,
+    CalibratedPundit,
+)
 from epl.pundits.dataset import (
     CALL_COLUMNS,
     FIXTURE_KEY,
@@ -52,12 +64,15 @@ __all__ = [
     "FIXTURE_KEY",
     "GRADE_COLUMNS",
     "LAWRENSON",
+    "MARGIN_MAP_LAWRENSON",
+    "MARGIN_MAP_SUTTON",
     "ORIGIN",
     "PAGES",
     "SOURCE",
     "SUMMARY_COLUMNS",
     "SUTTON",
     "Backfill",
+    "CalibratedPundit",
     "Page",
     "Pundit",
     "PunditDatasetError",

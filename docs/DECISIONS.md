@@ -529,7 +529,114 @@ published for the reason this row demonstrates.
 goal margin so that a 3-0 call is treated as the stronger claim it is, on past calls only. The
 shared layer is generic and sees a one-hot Prediction as a two-valued input; the Calibrated Pundit
 sees the Scoreline. They must not be collapsed into each other, and the numbers above are not a
-preview of #12's.
+preview of #12's — measured, #12 gets to 0.2127 and 0.2111 where the shared layer gets to 0.2374
+and 0.2473.
+
+## The Calibrated Pundit
+
+Added at stage 8 (issue #12). `epl.pundits.margin` is the map, `epl.pundits.calibrated` is the
+Predictor built on it, and `epl.pundits.report` is the three-way board and the two tables beside it.
+
+- **The map is bucketed by predicted goal margin, and by nothing else.** A call is reduced to
+  `pred_home_goals - pred_away_goals`, and the map answers "when this Pundit said that before, how
+  often was it Home, Draw and Away?". Reading a call as the Outcome it implies would throw away
+  the part the Pundit took a risk on: a +1 call goes Home 42% of the time and a +3 call 83%.
+- **No cap is chosen and no boundary is tuned.** The margins the Pundit actually called are the
+  buckets, and the one rule is that a bucket too thin to carry a rate merges with its neighbour
+  nearer zero. That is doing real work rather than tidying: over nine Seasons the two Pundits
+  called +3 or better 213 times and −3 or worse 50, so any fixed symmetric cap would either lose
+  the +3 bucket the ticket asks for by name or invent a −3 rate out of two dozen calls. The merge
+  settles it from the sample — Lawrenson ends with `-3,-2 | -1 | 0 | 1 | 2 | 3,4` and Sutton with
+  `-5,-4,-3,-2 | -1 | 0 | 1 | 2 | 3,4,5,6`, and nobody picked either.
+- **`MINIMUM_SAMPLE = 40` is stated rather than fitted, because it could not be fitted.** ADR 0008
+  permits a hyperparameter to be tuned only inside the Burn-In Window (2000/01–2004/05) and no
+  Pundit in this project published a call before 2017/18. The reasoning is structural instead: a
+  bucket is a claim about three Outcomes, the rarest is the Draw at about a quarter of Fixtures,
+  and forty calls expect ten Draws where twenty expect five. Its cost is visible — each Pundit's
+  first forty calls have no map behind them and are not covered, so 1,856 of 1,896 and 1,472 of
+  1,512 reach the board.
+- **Nothing enforces monotonicity, and the map comes out monotone anyway.** The isotonic layer of
+  ADR 0006 imposes it because it is correcting a *scale* and must not touch a ranking; here the
+  ranking is the thing being measured, and imposing it would turn a finding into an assumption.
+  Both Pundits' Home rates rise at every step. `tests/pundits/test_calibrated_over_the_corpus.py`
+  re-derives that rather than asserting it.
+- **A Calibrated Pundit is a Predictor, not a scoring step**, and that is the one structural
+  difference from `epl.calibration`. The shared layer is fitted on the Outcomes of the very
+  Predictions it corrects, so it can only run at scoring time and stores nothing. This map is
+  fitted on the Outcomes of matches that had *already kicked off* at the As-Of Instant, and its
+  input — the Scoreline — was published before it. So on any Friday it really can be computed and
+  quoted for Saturday. It goes through the ledger like everything else, reads its history through
+  `Evidence`, and every stored row carries `inputs_seen` and `latest_input` — which is what makes
+  the walk-forward claim checkable off the file rather than asserted by a test.
+- **It refits at every Prediction Round** rather than folding one map forward, for the reason
+  `epl.models.elo.Elo` gives at far greater cost: a map carried between calls would have to decide
+  whether the Evidence it was handed extends the one it fitted last time, and getting that wrong is
+  the one kind of bug this project cannot see.
+- **One map per Pundit, never one shared between them.** A map is a statement about one
+  forecaster's own calls, and pooling two people's would correct each with the other's habits —
+  the same reasoning `epl.ledger.scoreboard.calibrated_predictions` gives for fitting the shared
+  layer per Predictor. It costs the opening of each record separately.
+- **The Predictors are named for the map, not the person.** `margin_map_lawrenson` and
+  `margin_map_sutton`, with a `note` that says "a one-feature model fitted on Mark Lawrenson's
+  published Scorelines — not Mark Lawrenson". ADR 0003 spends its Consequences section on this and
+  the scoreboard line is the artifact a reader actually receives, so the distinction lives there.
+- **The comparison is cut; the calibration is not.** `epl.ledger.scoreboard.lines` was split out of
+  `build` so a caller can score a narrower slate over an already-calibrated frame. Cutting first
+  would give the Market Line a calibrated form fitted on a Pundit's 1,900 Fixtures rather than its
+  own 7,980 — a post-calibration number that exists nowhere else and belongs to nobody. Narrow the
+  comparison, never the Predictor; ADR 0001's rule, applied to the map.
+
+### Measured at stage 8 (23 Aug 2026)
+
+Re-derived on every run by `tests/pundits/test_calibrated_over_the_corpus.py`, which skips when
+`data/raw/` is absent.
+
+**The three-way board**, over the Fixtures every Predictor in it reached:
+
+| Over | Fixtures | Market Line | Elo | Calibrated Pundit | Naive Baseline | Pundit as-stated |
+|---|---|---|---|---|---|---|
+| Lawrenson's | 1,856 | 0.1943 | 0.2016 | **0.2127** | 0.2356 | 0.3335 |
+| Sutton's | 1,472 | 0.1968 | 0.2031 | **0.2111** | 0.2322 | 0.3346 |
+
+**The cost of stating certainty: 0.1209 and 0.1235 RPS.** The deliverable of ADR 0003, in one
+number per forecaster — what being asked for a scoreline instead of a probability charged them.
+
+**Read fairly, the same calls beat the floor they were a tenth of a point below.** That single
+sentence is what issue #12 existed to make true. And **accuracy barely moves** across the two
+readings — 0.5102 → 0.5116 and 0.4925 → 0.4993 — so the 0.12 RPS is the format of the question
+rather than a different set of opinions. The map changes the top pick only on draw calls, where no
+bucket has the Draw as its mode.
+
+**Neither Calibrated Pundit beats Elo.** ADR 0003 anticipated that one might, and the naming rule
+is in the code regardless of how it landed. It sits between Elo and the floor.
+
+**The shared calibration layer's 0.09 RPS gain disappears once the margin map runs first.** It
+costs the two Calibrated Pundits 0.0014 and 0.0015 — exactly what it costs Elo and the market.
+Ten-bin calibration error goes 0.327 → 0.019 and 0.338 → 0.020. That confirms stage 6's diagnosis
+from the other direction: the layer was never broken, and it only ever had something to find
+because an as-stated Pundit was the most miscalibrated Prediction on the board. The residual 0.019
+against the other four's 0.006 is the map's seven buckets showing — it is coarse by construction.
+
+**The fitted maps**, at each Pundit's final Prediction Round:
+
+| Margin | Lawrenson: calls, H/D/A | Sutton: calls, H/D/A |
+|---|---|---|
+| −3 and worse | with −2 | 134, 0.13 / 0.25 / 0.62 |
+| −2 | 315, 0.21 / 0.18 / 0.62 | with −3 and worse |
+| −1 | 150, 0.33 / 0.23 / 0.45 | 258, 0.31 / 0.22 / 0.47 |
+| 0 | 391, 0.33 / 0.30 / 0.38 | 375, 0.37 / 0.29 / 0.35 |
+| +1 | 344, 0.42 / 0.28 / 0.30 | 374, 0.48 / 0.25 / 0.26 |
+| +2 | 571, 0.60 / 0.21 / 0.19 | 264, 0.65 / 0.21 / 0.14 |
+| +3 and better | 115, 0.83 / 0.10 / 0.07 | 97, 0.81 / 0.12 / 0.06 |
+| pooled | 1,886, 0.44 / 0.23 / 0.33 | 1,502, 0.44 / 0.24 / 0.32 |
+
+**The best and worst calls, by miss** (user story 34, at `outputs/pundit_calls.csv`). The miss is
+the RPS of the fair reading. Both ends are bold calls: the best twenty are all |margin| ≥ 3 that
+came off — where stating certainty *paid*, so the per-call cost is negative — and the worst are the
+same boldness missing, where the as-stated reading scored a flat 1.00. Lawrenson's best is 2018/19
+Tottenham 3-0 Huddersfield (0.004) and his worst 2018/19 Bournemouth 3-0 Fulham (0.890), which
+Fulham won; Sutton's are 2023/24 Arsenal 3-0 Burnley (0.017) and 2023/24 Liverpool 3-0 Crystal
+Palace (0.774), which Palace won.
 
 ## Open risks
 

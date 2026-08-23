@@ -3,8 +3,9 @@
 A Pundit publishes a Scoreline. Read as a Prediction that is ``[1, 0, 0]`` — total certainty — and
 RPS charges 1.00 for calling Home when Away happens. That is not a fair reading of what anybody
 said, and ADR 0003 is explicit that it "would fail our own honesty bar" as a headline. It is
-published anyway, beside the fair reading the Calibrated Pundit will give at issue #12, because
-the *difference* between the two is the number worth having: the cost of stating certainty.
+published anyway, beside the fair reading the Calibrated Pundit gives
+(:mod:`epl.pundits.calibrated`), because the *difference* between the two is the number worth
+having: the cost of stating certainty. Measured, that difference is 0.12 RPS.
 
 So the as-stated score is a real measurement of a deliberately unfair question, and its
 :attr:`Pundit.note` says so on the scoreboard, every time, wherever the number is reported.
@@ -51,8 +52,23 @@ from epl.windows import season_label
 AS_STATED_CAVEAT = (
     "as-stated: a published Scoreline read as [1, 0, 0], a claim of certainty no Pundit made, so "
     "this RPS measures the format of the question as much as the answer (ADR 0003). The fair "
-    "reading is the Calibrated Pundit, at issue #12"
+    "reading is `{fair}` beside it, and the gap between the two is the cost of stating certainty"
 )
+
+#: What a Calibrated Pundit's name is built out of. That Predictor is named for the **map** rather
+#: than for the forecaster, which is what stops any row of any output from reading as a person
+#: (ADR 0003).
+#:
+#: Here rather than in :mod:`epl.pundits.calibrated`, which is where the Calibrated Pundit itself
+#: lives, because both halves of the pair need it and this half exists first — a Calibrated Pundit
+#: is built *from* a Pundit, so it may import this module and this module may not import it. Two
+#: copies of the prefix is how a note comes to point at a Predictor nobody registered.
+NAME_PREFIX = "margin_map_"
+
+
+def map_name(pundit: str) -> str:
+    """The Calibrated Pundit built from this Pundit's calls, by name."""
+    return f"{NAME_PREFIX}{pundit}"
 
 
 class PunditError(Exception):
@@ -158,7 +174,7 @@ def a_pundit(name: str, display_name: str) -> Pundit:
         note=(
             f"{display_name} for the {ORIGIN}, {span}, archived by MyFootballFacts; "
             f"measured over the Fixtures they called, so not comparable to a full-window RPS. "
-            f"{AS_STATED_CAVEAT}"
+            f"{AS_STATED_CAVEAT.format(fair=map_name(name))}"
         ),
     )
 

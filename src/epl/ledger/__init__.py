@@ -35,6 +35,10 @@ never editing history. The ingest already applies that same rule to the bytes a 
 from — see `epl.ingest.superseded_dir`.
 """
 
+import importlib
+
+import pandas as pd
+
 from epl.ledger import backtest, live, schema, scoreboard
 from epl.ledger.schema import (
     DTYPES,
@@ -52,10 +56,41 @@ from epl.ledger.scoreboard import (
     scored_predictions,
 )
 
+#: Importing these is what puts Predictors on the scoreboard. Each stage adds its own — the
+#: benchmarks at issues #7 and #8, ``epl.models`` at #9, ``epl.pundits`` at #11 and #12.
+#:
+#: Here rather than in the command line because two entry points now need it: ``epl.ledger`` walks
+#: and scores every registered Predictor, and ``epl.pundits`` reports over a subset of the same
+#: board. A second hand-written list is how a Predictor comes to exist on one report and not the
+#: other.
+PREDICTOR_PACKAGES: tuple[str, ...] = ("epl.benchmarks", "epl.models", "epl.pundits")
+
+
+def register_all() -> None:
+    """Import every package that registers Predictors.
+
+    Imported inside the call rather than at module scope, because ``epl.pundits`` reports over this
+    package and importing it from here would close the loop.
+    """
+    for package in PREDICTOR_PACKAGES:
+        importlib.import_module(package)
+
+
+def stored() -> pd.DataFrame:
+    """Every Prediction in both stores, as one frame.
+
+    One row schema, so scoring never asks which store it is reading (ADR 0005) — and a caller
+    cannot tell from the shape of what comes back either, which is the property that keeps a live
+    track record and a backtest scored by identical code.
+    """
+    return pd.concat([backtest.read(), live.read()], ignore_index=True)
+
+
 __all__ = [
     "DTYPES",
     "FIXTURE_KEY",
     "LEDGER_COLUMNS",
+    "PREDICTOR_PACKAGES",
     "RELIABILITY_REPORT_COLUMNS",
     "SCOREBOARD_COLUMNS",
     "LedgerError",
@@ -65,7 +100,9 @@ __all__ = [
     "check",
     "live",
     "predictions_for",
+    "register_all",
     "schema",
     "scoreboard",
     "scored_predictions",
+    "stored",
 ]

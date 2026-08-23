@@ -282,6 +282,46 @@ class TestTheCalibratedPredictions:
         assert set(scoreboard.CALIBRATED_PROBABILITY_COLUMNS) <= set(scored.columns)
 
 
+class TestScoringANarrowerSlate:
+    """The split issue #12's three-way comparison needs: cut the slate, never the calibration."""
+
+    def test_the_board_is_the_same_however_it_is_assembled(self) -> None:
+        """:func:`scoreboard.build` is :func:`scoreboard.lines` over
+        :func:`scoreboard.calibrated_predictions`, and has to stay that way — the split exists to
+        let a caller step between the two, not to give it a second way of scoring."""
+        rows, matches = _season({"confident": (0.9, 0.05, 0.05)})
+
+        assembled = scoreboard.lines(
+            scoreboard.calibrated_predictions(rows, matches, seasons=[2005])
+        )
+
+        pd.testing.assert_frame_equal(
+            assembled, scoreboard.build(rows, matches, seasons=[2005])
+        )
+
+    def test_a_late_slate_keeps_the_calibration_the_whole_record_earned(self) -> None:
+        """The reason the split is worth having. Calibrating first and cutting after leaves every
+        row of a late slate corrected, because the map behind it was fitted on the Predictions that
+        came before. Cutting first and calibrating after throws that history away and starts the
+        map again, so the same rows come back uncorrected — a post-calibration number that exists
+        nowhere else and belongs to nobody (ADR 0001's lesson, applied to the map rather than to
+        the slate).
+        """
+        rows, matches = _season({"confident": (0.9, 0.05, 0.05)})
+        late = rows.loc[rows["as_of_instant"] > pd.Timestamp("2006-03-01")]
+
+        cut_after = scoreboard.lines(
+            scoreboard.calibrated_predictions(rows, matches, seasons=[2005]).loc[
+                lambda scored: scored["as_of_instant"] > pd.Timestamp("2006-03-01")
+            ]
+        )
+        cut_first = scoreboard.build(late, matches, seasons=[2005])
+
+        assert int(cut_after.loc[0, "corrected"]) == int(cut_after.loc[0, "fixtures"])
+        assert int(cut_first.loc[0, "corrected"]) < int(cut_first.loc[0, "fixtures"])
+        assert cut_after.loc[0, "fixtures"] == cut_first.loc[0, "fixtures"]
+
+
 class TestThePublishedReliabilityDiagrams:
     """Issue #10's fourth acceptance criterion: ten bins, per Predictor, in both forms.
 

@@ -21,20 +21,16 @@ one probability band while breaking another shows up first.
 from __future__ import annotations
 
 import argparse
-import importlib
 import sys
 from pathlib import Path
 
 import pandas as pd
 
+import epl.ledger as ledger
 from epl.ingest import match_table
 from epl.ledger import backtest, live, schema, scoreboard
 from epl.predictors import by_name, registered
 from epl.windows import EVALUATION_WINDOW
-
-#: Importing these is what puts Predictors on the scoreboard. Each later stage adds its own —
-#: ``epl.models`` at issue #9, ``epl.pundits`` at issue #11.
-PREDICTOR_PACKAGES: tuple[str, ...] = ("epl.benchmarks", "epl.models", "epl.pundits")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,8 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("audit", help="re-check every stored Prediction and the seal on outputs/live/")
 
     args = parser.parse_args(argv)
-    for package in PREDICTOR_PACKAGES:
-        importlib.import_module(package)
+    ledger.register_all()
 
     if args.command == "backfill":
         return _backfill(args.matches, args.predictor)
@@ -75,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
 def _stored() -> pd.DataFrame:
     """Every Prediction in both stores. One row schema, so scoring never asks which it is
     reading (ADR 0005)."""
-    return pd.concat([backtest.read(), live.read()], ignore_index=True)
+    return ledger.stored()
 
 
 def _table(board: pd.DataFrame, columns: tuple[str, ...]) -> str:

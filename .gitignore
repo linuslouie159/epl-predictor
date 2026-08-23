@@ -49,3 +49,11 @@ outputs/overround.csv
 # The reliability diagrams `python -m epl.ledger reliability` publishes are the scoreboard at bin
 # resolution — same source, same regenerability, same reasoning.
 outputs/reliability.csv
+
+# The four tables `python -m epl.pundits three-way`, `calls` and `map` publish. All are derived
+# from the same two stores by the same code, so the reasoning above applies unchanged: they are
+# code output rather than evidence, and only outputs/live/ is evidence (ADR 0005).
+outputs/three_way.csv
+outputs/certainty.csv
+outputs/pundit_calls.csv
+outputs/margin_map.csv

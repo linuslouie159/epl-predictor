@@ -209,9 +209,24 @@ def build(
     Sorted on the pre-calibration RPS: that is the Predictor's own score, and ordering the board by
     what the calibration layer did to it would let the layer decide who is winning.
     """
-    scored = calibrated_predictions(rows, matches, seasons=seasons)
-    lines = [_line(str(name), group) for name, group in scored.groupby("predictor", sort=True)]
-    board = pd.DataFrame(lines, columns=list(SCOREBOARD_COLUMNS))
+    return lines(calibrated_predictions(rows, matches, seasons=seasons))
+
+
+def lines(scored: pd.DataFrame) -> pd.DataFrame:
+    """The board over an already-calibrated frame — :func:`calibrated_predictions`' output, scored.
+
+    Split out from :func:`build` so that a caller can cut the *slate* without also cutting what
+    each Predictor's calibration map was fitted on. Issue #12's three-way comparison needs exactly
+    that: it scores every Predictor over the Fixtures they all cover, but the Market Line's
+    calibrated form there has to be the one the Market Line actually has — fitted on its own 7,980
+    Predictions — rather than a weaker map refitted on a Pundit's 1,900. Cutting first and
+    calibrating after would publish a post-calibration column that exists nowhere else and belongs
+    to nobody.
+
+    Same reasoning as ADR 0001's: narrow the comparison, never the Predictor.
+    """
+    rows = [_line(str(name), group) for name, group in scored.groupby("predictor", sort=True)]
+    board = pd.DataFrame(rows, columns=list(SCOREBOARD_COLUMNS))
     return board.sort_values("rps", kind="stable").reset_index(drop=True)
 
 

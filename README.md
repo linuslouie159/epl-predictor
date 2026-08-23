@@ -19,6 +19,8 @@ Measured on the Evaluation Window (2005/06–2025/26, 7,980 Fixtures):
 | **Target** | **≤ 0.1986** | market + 0.005 — this is success |
 | Market Line | 0.1936 | the opponent |
 | Ceiling Line | 0.1968* | reference only; knows team news we don't |
+| Margin Map (Lawrenson's calls) | 0.2127‡ | the same calls read fairly |
+| Margin Map (Sutton's calls) | 0.2111‡ | the same, 2022/23 onward |
 | Lawrenson, as-stated | 0.3341† | a published Scoreline taken literally |
 | Sutton, as-stated | 0.3343† | the same, 2022/23 onward |
 
@@ -30,6 +32,11 @@ by 0.0013 RPS, which is what a few hours of team news is worth.
 Scoreline read as `[1, 0, 0]` is a claim of certainty nobody made, which is what makes this number
 worse than the floor while the same calls pick the right Outcome 51% and 49% of the time — seven
 points above the floor and four behind the market. See [Pundits](#pundits).
+
+‡ **a one-feature model, not a person** — the same calls with each Scoreline read as what a call of
+that predicted goal margin has historically produced ([ADR 0003](./docs/adr/0003-calibrated-pundit-predictor.md)).
+Over 1,856 and 1,472 Fixtures, the 40 opening calls of each record having no map behind them yet.
+The gap to the as-stated row above — **0.1209 and 0.1235 RPS** — is the cost of stating certainty.
 
 The system does **not** need to beat the market. It needs to be leak-free, well calibrated, and
 within a stated distance of the market while beating the Naive Baseline and the Pundits.
@@ -109,7 +116,13 @@ src/epl/models/         elo.py, ordered_logit.py, burn_in.py; dixon-coles
 src/epl/benchmarks/     market line + ceiling line (vig.py), naive baseline
 outputs/overround.csv   the margin in each book per Season; regenerable, gitignored
 src/epl/pundits/        myfootballfacts.py, dataset.py, grading.py, predictor.py
+src/epl/pundits/margin.py         the margin map; calibrated.py the Predictor over it
+src/epl/pundits/report.py         the three-way board, the certainty gap, the calls by miss
 src/epl/pundits/predictions.csv   the frozen backfill: 3,408 calls, committed with the code
+outputs/three_way.csv   the board over each Pundit's shared Fixtures; regenerable, gitignored
+outputs/certainty.csv   the two readings and the gap between them; regenerable, gitignored
+outputs/pundit_calls.csv  every call ranked by miss; regenerable, gitignored
+outputs/margin_map.csv  what a call of each margin is worth; regenerable, gitignored
 src/epl/simulate/       Bayesian fit + Monte Carlo Season Projection
 src/epl/ledger/         Prediction stores, the row audit, the scoreboard
 outputs/backtest/       regenerable, gitignored — one file per Predictor
@@ -395,6 +408,7 @@ slot, and each `covers` only the Seasons they worked.
 python -m epl.pundits fetch    # cache the nine archive pages
 python -m epl.pundits build    # parse, reconcile with the corpus, freeze predictions.csv
 python -m epl.pundits grades   # exact-score and correct-Outcome rates per Pundit and Season
+python -m epl.pundits three-way  # the three-way board and the cost of stating certainty
 ```
 
 **3,408 calls of a possible 3,420.** Only facts are stored — Fixture, predicted Scoreline, Pundit,
@@ -414,12 +428,50 @@ Market Line scores 0.1946 and 0.1968 and the Naive Baseline 0.2356 and 0.2319 �
 Pundit is a tenth of a point *below the floor*. On accuracy, which asks who they picked rather than
 how sure they claimed to be, the same calls beat the floor by seven points and trail the market by
 four. Nothing about the Pundit changes between those two sentences; only the question does. That is
-the cost of stating certainty, and the fair reading is the Calibrated Pundit at issue #12.
+the cost of stating certainty, and the fair reading is the Calibrated Pundit below.
 
-The shared calibration layer, which costs every other Predictor about 0.001 RPS, **gains a Pundit
-about 0.09** — 0.3341 → 0.2374 and 0.3343 → 0.2473. That is the first Predictor it has had anything
-real to correct, and it confirms rather than contradicts the finding in
-[Calibration](#calibration): the layer works, and the other four were already well calibrated.
+## The Calibrated Pundit
+
+A **one-feature model, not a person.** Each published Scoreline is reduced to its predicted goal
+margin — 3-0 and 4-1 are both +3 — and quoted the Outcome frequencies a call of that margin has
+historically produced, fitted walk-forward on that Pundit's past calls only. It registers as
+`margin_map_lawrenson` and `margin_map_sutton`, and each carries a `note` saying in as many words
+that it is not the forecaster, because "Sutton beat the model" is a sentence no output of this
+project may support ([ADR 0003](./docs/adr/0003-calibrated-pundit-predictor.md)).
+
+```
+python -m epl.pundits three-way   # model, market, floor and both readings, on shared Fixtures
+python -m epl.pundits calls       # every call ranked by the miss its fair reading still had
+python -m epl.pundits map         # what a call of each predicted goal margin is worth
+```
+
+| Over | Fixtures | Market Line | Elo | Calibrated Pundit | Naive Baseline | as-stated |
+|---|---|---|---|---|---|---|
+| Lawrenson's | 1,856 | 0.1943 | 0.2016 | **0.2127** | 0.2356 | 0.3335 |
+| Sutton's | 1,472 | 0.1968 | 0.2031 | **0.2111** | 0.2322 | 0.3346 |
+
+**The cost of stating certainty is 0.1209 and 0.1235 RPS**, published with the gap in a column of
+that name. Read fairly, the same calls beat the floor they were a tenth of a point below — and
+accuracy barely moves across the two readings (0.5102 → 0.5116, 0.4925 → 0.4993), so the 0.12 really
+is the format of the question rather than a different set of opinions. Neither Calibrated Pundit
+beats Elo; ADR 0003 anticipated that one might, and the naming rule is in the code either way.
+
+Nothing chooses the buckets. The margins each Pundit actually called *are* the buckets, and the one
+rule is that a bucket too thin to carry a rate merges with its neighbour nearer zero — so Lawrenson
+ends with `-3,-2 | -1 | 0 | 1 | 2 | 3,4` and Sutton with `-5,-4,-3,-2 | -1 | 0 | 1 | 2 | 3,4,5,6`.
+Nothing enforces monotonicity either, and both come out monotone in the Home rate at every step:
++1 goes Home 42% and 48% of the time, +3 or better 83% and 81%.
+
+Unlike the shared layer, a Calibrated Pundit is a real Predictor: its map is fitted on matches that
+had already kicked off at the As-Of Instant, and its input was published before it, so it goes
+through the ledger and audits like everything else. A map needs 40 past calls behind it, so the
+opening 40 of each record are not covered — 1,856 of 1,896 and 1,472 of 1,512.
+
+The shared calibration layer, which costs every other Predictor about 0.001 RPS, **gains an
+as-stated Pundit about 0.09** — 0.3341 → 0.2374 and 0.3343 → 0.2473. Put the margin map in front of
+it and that gain vanishes: it costs 0.0014 and 0.0015, exactly what it costs Elo and the market.
+Both facts point the same way, and it is the one in [Calibration](#calibration): the layer works,
+and the other Predictors were already well calibrated.
 
 Parsing nine pages of hand-maintained HTML is not tidy, and none of it is guessed at. Names carry
 annotations (`Chelsea*`, `Crystal Palace (19th May)`) which are stripped, and genuine misspellings
