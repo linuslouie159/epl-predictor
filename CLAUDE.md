@@ -41,13 +41,24 @@ Do not "fix" these without reading the linked ADR first:
 - **`epl.calibration` is at the top level, not in `epl.models`**, and older docstrings said
   otherwise. It is not a model, and putting it there would make `epl.models` and `epl.ledger`
   import each other. See docs/DECISIONS.md, "The shared calibration layer".
+- **Two Pundits are registered, not one**, and their as-stated RPS of ~0.334 is *worse than the
+  Naive Baseline*. Both are correct. A Pundit is "a named public forecaster" (CONTEXT.md) and two
+  people worked these nine Seasons; and a Scoreline read as `[1, 0, 0]` is a claim of certainty
+  nobody made, which is what the number measures (ADR 0003). Their `note` says so, and must keep
+  saying so. On accuracy the same calls beat the floor by seven points.
+- **The Pundit dataset is committed to git and the pages it came from are not.**
+  `src/epl/pundits/predictions.csv` ships with the code like the Club table; `data/raw/` is
+  gitignored like everything else in it. That is the ticket's "committed and frozen rather than
+  re-scraped on every run", and the corpus test rebuilds the file from the cache and compares
+  bytes so "frozen" cannot come to mean "whatever was written last".
 - **Elo's fitted draw band is symmetric and the fit cannot move its centre**, and **Elo rebuilds
   its whole rating pool at every one of the 952 Prediction Rounds** rather than folding one
   forward. Both are explained in `src/epl/models/__init__.py`; the second costs a minute per
   backfill and buys the one kind of leak this project cannot see.
 - **Refreshing a cached raw file archives the old bytes** into `superseded/` instead of replacing
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
-  Both are explained where they live — `src/epl/ingest/football_data.py` and `src/epl/clubs/table.py`.
+  Both are explained where they live — `src/epl/ingest/cache.py`, which both the Football-Data
+  ingest and the Pundit fetch write through, and `src/epl/clubs/table.py`.
 
 ## Never do this
 
@@ -83,7 +94,13 @@ probabilities (`ordered_logit.py`), and the only place a hyperparameter may be f
 
 **Stage 6 is built**: the shared isotonic calibration layer (`src/epl/calibration.py`, issue #10) —
 one step, fitted walk-forward on out-of-sample Predictions only, applied to every Predictor through
-the contract by `epl.ledger.scoreboard`. Every metric is now reported twice. The scoreboard reads:
+the contract by `epl.ledger.scoreboard`. Every metric is now reported twice.
+
+**Stage 7 is built**: the Pundit backfill (`src/epl/pundits/`, issue #11) — nine MyFootballFacts
+season pages fetched and parsed (`myfootballfacts.py`), reconciled with the corpus and frozen as
+the committed `predictions.csv` (`dataset.py`), graded two ways (`grading.py`), and registered as
+two named Predictors scored as-stated (`predictor.py`). 3,408 calls of a possible 3,420. The
+scoreboard now reads:
 
 ```
 pre-calibration
@@ -92,6 +109,8 @@ pre-calibration
   ceiling_line      2660 0.1968 0.5717    0.9639    0.5498 0.0060
            elo      7980 0.1994 0.5810    0.9771    0.5380 0.0055
 naive_baseline      7980 0.2294 0.6430    1.0642    0.4556 0.0061
+     lawrenson      1896 0.3341 0.9810   16.9415    0.5095 0.3270
+        sutton      1512 0.3343 1.0159   17.5435    0.4921 0.3386
 
 post-calibration
      predictor  corrected    rps  brier  log_loss  accuracy    ece  correction
@@ -99,9 +118,39 @@ post-calibration
   ceiling_line       2280 0.1980 0.5755    0.9817    0.5445 0.0084      0.0328
            elo       7600 0.2004 0.5836    1.0128    0.5353 0.0097      0.0307
 naive_baseline       7600 0.2309 0.6478    1.2269    0.4479 0.0161      0.0455
+     lawrenson       1508 0.2374 0.6827    4.2683    0.5105 0.0792      0.3880
+        sutton       1130 0.2473 0.7230    5.3558    0.5033 0.0988      0.3841
 ```
 
-`epl.pundits` and `epl.simulate` are still documented shells, each naming the issue that builds it.
+`epl.simulate` is still a documented shell, naming the issue that builds it.
+
+Four things about stage 7 worth knowing before building on it:
+
+- **The shared calibration layer gains a Pundit ~0.09 RPS where it cost the other four ~0.001.**
+  That is the re-measurement stage 6 asked for by name, and it *confirms* stage 6 rather than
+  overturning it: the layer was never broken, it had nothing to find. All four earlier Predictors
+  arrive at a ten-bin error of about 0.006; a Pundit arrives at 0.33 and the same unchanged layer
+  recovers most of it. **This is still not the Calibrated Pundit.** Issue #12 fits a different map,
+  bucketed by predicted goal margin, and must not be collapsed into this one.
+- **The as-stated number is worse than the floor, and that is the deliverable.** 0.334 against a
+  Naive Baseline of 0.236 over the same Fixtures. On accuracy the same calls beat that floor
+  0.5095 to 0.4388 and trail the market by four points. Both readings are published; either alone
+  is an argument (ADR 0003). `python -m epl.pundits grades` is the lay pair beside it — 11.0% and
+  9.1% exact scores, 50.9% and 49.2% correct Outcomes. Each Pundit's `note` carries three things
+  onto the scoreboard and must keep carrying all three: the BBC as the origin, that 1,896 and
+  1,512 Fixtures are not the board's 7,980 so the RPS is not comparable, and what the as-stated
+  reading is.
+- **Their `log_loss` of 16.9 and 17.5 is an artefact of the floor, not a measurement.** A one-hot
+  Prediction that is wrong is clipped at `epl.metrics.LOG_LOSS_FLOOR` before the log, so the number
+  is the miss rate times the floor. `epl.metrics.log_loss` names this exact case in its docstring.
+  Do not report it, and do not "fix" it by raising the floor.
+- **The build reads the result the page publishes and then throws it away.** 3,402 of the 3,406
+  calls that carry one agree with Football-Data — two Fixtures were only ever listed as postponed,
+  so they have no result to check — and that agreement is what confirms two spellings became the
+  right two Clubs the right way round, which is the one thing no unit test reaches. The four that
+  disagree are named in `tests/pundits/test_over_the_corpus.py`. Do not store the result:
+  `predictions.csv` holds Fixture, Scoreline, Pundit and date, and nothing that knows an Outcome
+  (ADR 0005).
 
 Four things about stage 6 worth knowing before building on it:
 
@@ -118,7 +167,8 @@ Four things about stage 6 worth knowing before building on it:
   moves 30.2% → 29.3% against 27.6% observed, which is exactly the defect #9 handed the layer. So
   the diagnosis is "well-calibrated inputs", not "wired up wrong", and a Predictor that genuinely
   needs correcting — a Pundit scored as-stated, at issue #11 — should be measured again rather than
-  assumed to behave like these four.
+  assumed to behave like these four. **Stage 7 measured it**, and it does not behave like them: the
+  same layer gains a Pundit about 0.09 RPS.
 - **The layer stores nothing, and no forecast is ever calibrated.** A calibrated Prediction is a
   function of a stored Prediction *and* of Outcomes that happened after it, so it is derived at
   scoring time. No row in either store knows an Outcome, and that is what makes a leaked Prediction
@@ -197,14 +247,15 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Issue #11 — the Pundits** is the other half of the three-way scoreboard, and stage 6 has just
-made it more interesting than it was. It will want `covers` and `note` from the contract stage 4
-added: a Pundit published in the Seasons they worked and no others, and a Pundit scored as-stated
-needs its caveat travelling with it. It is also the first Predictor the calibration layer has
-something real to correct — a published Scoreline read as `[1, 0, 0]` is the most miscalibrated
-Prediction there is (ADR 0003) — so the stage 6 finding should be re-measured there rather than
-assumed to hold, and the Calibrated Pundit's own map (issue #12) is a *different* thing from the
-shared layer and must not be collapsed into it.
+**Issue #12 — the Calibrated Pundit** is the other half of what #11 just started, and it has real
+numbers to beat now rather than illustrative ones. Two things it must not do. It must not reuse the
+shared layer: #12's map is bucketed by **predicted goal margin**, so that a 3-0 call is treated as
+the stronger claim it is, and the shared layer sees only a one-hot input with no Scoreline in it.
+And a Calibrated Pundit is a one-feature model, not a person (ADR 0003) — name it so nobody can
+report "Sutton beat the model". The bar it has to clear is the generic layer's: 0.2374 for
+Lawrenson and 0.2473 for Sutton, from 0.3341 and 0.3343 as stated. It also carries user story 34,
+each Pundit's best and worst calls by calibration miss, which `epl.pundits.grading` has the rows
+for.
 
 **Issue #13 — Dixon-Coles** is now the only remaining way to close the 0.0058 gap to the market,
 since the calibration layer turned out to cost rather than buy. It is also the one that unblocks
@@ -225,6 +276,9 @@ conda env create -f environment.yml
 conda activate epl-predictor
 python -m epl.ingest fetch     # fill data/raw/ — 104 files, 26 Seasons x 4 tiers
 python -m epl.ingest build     # write matches.csv (52,672) + odds_availability.csv
+python -m epl.pundits fetch    # cache the nine MyFootballFacts season pages
+python -m epl.pundits build    # re-freeze predictions.csv — 3,408 calls, cross-checked
+python -m epl.pundits grades   # exact-score and correct-Outcome rates per Pundit and Season
 python -m epl.ledger backfill  # walk every registered Predictor over the Evaluation Window
 python -m epl.ledger scoreboard      # every metric twice, pre- and post-calibration
 python -m epl.ledger reliability     # the 10-bin diagrams per Predictor, in both forms

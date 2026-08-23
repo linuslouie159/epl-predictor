@@ -385,10 +385,156 @@ fact about the corpus.
   the most miscalibrated Prediction there is. That is the first Predictor this layer has something
   real to correct, and none of the numbers above should be assumed to survive it.
 
+## The Pundit backfill
+
+Added at stage 7 (issue #11). `epl.pundits.myfootballfacts` fetches and parses the nine archive
+pages, `epl.pundits.dataset` reconciles them with the corpus and freezes `predictions.csv` beside
+the code, `epl.pundits.grading` marks each call two ways, and `epl.pundits.predictor` registers the
+Pundits as Predictors scored as-stated.
+
+- **Two named Pundits, not one pundit slot.** A Pundit is "a *named* public forecaster"
+  (CONTEXT.md), the spec asks for "each Pundit's best and worst calls" (user story 34), and
+  ADR 0003 spends its Consequences section on keeping a person distinguishable from a model built
+  out of their calls. Mark Lawrenson worked 2017/18–2021/22 and Chris Sutton 2022/23–2025/26, so
+  `lawrenson` and `sutton` are registered separately and each `covers` its own Seasons. A single
+  averaged line would be a Predictor that is nobody, and neither of them could be held to it.
+- **The dataset is committed, and it is provably what the build produces.** `predictions.csv` ships
+  with the package exactly as the Club table does, so a fresh clone can score the Pundits without
+  touching MyFootballFacts. "Frozen" is only worth something if the frozen file is the file the
+  build makes, so the corpus test rebuilds it from the raw cache and compares bytes.
+- **Only facts are stored** — Fixture, predicted Scoreline, Pundit, date. Not the prose, not the
+  matchday heading, and **not the result**, which the page publishes beside every call. The result
+  is read at build time to check the parse and then discarded: a stored Prediction that knew its
+  own Outcome is the thing ADR 0005 exists to prevent, and it is what makes a leaked Prediction
+  distinguishable from a recorded one.
+- **The date comes from Football-Data, not from the page.** The matchday headings carry typos —
+  2024/25's opening matchday is headed `16/08/25`, a year out — and a Fixture is identified by its
+  Club pairing inside a Season anyway, which is what the ledger keys on. Every call is located
+  against the corpus, and one the corpus has no Fixture for is refused rather than invented.
+- **A Fixture listed twice keeps the call published for the date it was played.** Fifteen Fixtures
+  across the nine Seasons were postponed or abandoned, re-listed later, and called twice — 2022/23's
+  Leicester against Aston Villa is 1-2 on the original date and 2-2 on the rearranged one. The one
+  that stands is the one whose listing is not marked `PP`, because that is the date the Fixture
+  actually has and the date its As-Of Instant is derived from. The order the page lists them in
+  decides nothing: 2020/21 puts the played listing first and 2022/23 puts it second.
+- **Annotations are stripped; misspellings are Alias rows.** The pages hang notes on Club names — a
+  trailing `*`, or `(14.02)` naming a rearranged date — and those are facts about the Fixture, so
+  they never reach the Alias table. `Wolverhampton Wand` and `Brighton & Hove Alb` are the source
+  genuinely misspelling a Club, and a spelling is exactly what that table holds. 38 spellings across
+  32 Clubs, added to `epl.clubs.build` so the committed CSVs keep their provenance.
+- **Twice the Scoreline landed inside a Club's name.** `Burnley v Brighton 1-2 Hove Albion` is the
+  source writing `Burnley v Brighton & Hove Albion` and dropping the call where the `&` belongs.
+  Read literally that is a Club called `Burnley v Brighton`; handled in the parser rather than as
+  two Alias rows, because it is not a spelling of anything.
+- **The as-stated score is published with three caveats attached to it.** Each Pundit's `note`
+  carries all of them onto the scoreboard, because the scoreboard line is the artifact a reader
+  actually receives: who published the calls (the BBC, archived by MyFootballFacts — issue #11 asks
+  that the origin be attributed); that the number is measured over the Fixtures that Pundit called
+  and so is **not comparable to a full-window RPS**, which is the Ceiling Line's lesson applied
+  again (ADR 0001); and that a Scoreline read as `[1, 0, 0]` is a claim of certainty nobody made,
+  which is what the number really measures (ADR 0003).
+- **Log loss is not a meaningful number for these two.** A one-hot Prediction that is wrong has its
+  probability floored at `epl.metrics.LOG_LOSS_FLOOR` before the log is taken, so the 16.9 and 17.5
+  on the scoreboard are the miss rate times the floor and say nothing about the Pundit. The metrics
+  module named this case when it was written; it is part of why RPS is the headline.
+
+### Measured at stage 7 (23 Aug 2026)
+
+Re-derived on every run by `tests/pundits/test_over_the_corpus.py`, which skips when `data/raw/` is
+absent, and by `tests/pundits/test_the_frozen_dataset.py`, which does not need it.
+
+**3,408 calls of a possible 3,420**, all nine pages parsed:
+
+| Season | Pundit | Calls | Exact scores | Correct Outcomes |
+|---|---|---|---|---|
+| 2017/18 | Lawrenson | 378 | 48 (12.7%) | 193 (51.1%) |
+| 2018/19 | Lawrenson | 380 | 42 (11.1%) | 204 (53.7%) |
+| 2019/20 | Lawrenson | 379 | 35 (9.2%) | 186 (49.1%) |
+| 2020/21 | Lawrenson | 380 | 45 (11.8%) | 189 (49.7%) |
+| 2021/22 | Lawrenson | 379 | 39 (10.3%) | 194 (51.2%) |
+| 2022/23 | Sutton | 372 | 32 (8.6%) | 174 (46.8%) |
+| 2023/24 | Sutton | 380 | 28 (7.4%) | 204 (53.7%) |
+| 2024/25 | Sutton | 380 | 47 (12.4%) | 193 (50.8%) |
+| 2025/26 | Sutton | 380 | 31 (8.2%) | 173 (45.5%) |
+| **Lawrenson** | | **1,896** | **209 (11.0%)** | **966 (50.9%)** |
+| **Sutton** | | **1,512** | **138 (9.1%)** | **744 (49.2%)** |
+
+Twelve Fixtures have no call — the archive never listed them, eight of them in 2022/23, the Season
+of the Queen's death and the winter World Cup. They are named in the corpus test and each Pundit's
+`covers` keeps them off the ledger, because a made-up Prediction that scores is worse than an
+absent one.
+
+**The as-stated scoreboard, and the same Fixtures for comparison.** Each Pundit is measured only
+over the Fixtures they spoke to, so the other Predictors are cut to the same slate — the Ceiling
+Line's lesson, applied again:
+
+| Over | Fixtures | Market Line | Elo | Naive Baseline | Pundit |
+|---|---|---|---|---|---|
+| Lawrenson's, RPS | 1,896 | 0.1946 | 0.2019 | 0.2356 | **0.3341** |
+| Lawrenson's, accuracy | 1,896 | 0.5530 | 0.5385 | 0.4388 | **0.5095** |
+| Sutton's, RPS | 1,512 | 0.1968 | 0.2028 | 0.2319 | **0.3343** |
+| Sutton's, accuracy | 1,512 | 0.5453 | 0.5351 | 0.4431 | **0.4921** |
+
+**That pair of rows is ADR 0003's whole argument, measured.** On RPS a Pundit is 0.14 behind the
+market and a tenth of a point *below the floor* — worse than a Predictor that does not know which
+Clubs are playing. On accuracy, which asks only who they picked and not how sure they claimed to be,
+the same calls are four points behind the market and seven ahead of the floor. Nothing about the
+Pundit changes between those two lines; only the question does. ADR 0003 predicted "~0.36 against a
+market at ~0.19" on illustrative rates and the measured gap is 0.334 against 0.195.
+
+**The published results cross-check against Football-Data on 3,402 of 3,406 rows.** This is what
+closes open risk 3, and it is a far stronger check than the ticket's "at least one row": the page
+prints the real score beside every call, so agreement confirms the one thing no unit test can reach
+— that two spellings became the right two Clubs, the right way round. The denominator is 3,406 and
+not 3,408 because two Fixtures — 2022/23's Southampton against Brentford and Crystal Palace against
+Manchester United — were only ever listed as postponed, so each carries a call and no score;
+counting those as agreements would report a check that was never made. The four disagreements are
+MyFootballFacts one goal out in one row, and Football-Data is the authority:
+
+| Season | Fixture | MyFootballFacts | Football-Data |
+|---|---|---|---|
+| 2017/18 | Bournemouth v Southampton | 1-0 | 1-1 |
+| 2024/25 | Ipswich v Bournemouth | 1-1 | 1-2 |
+| 2024/25 | Ipswich v Arsenal | 0-3 | 0-4 |
+| 2025/26 | Bournemouth v West Ham | 1-2 | 2-2 |
+
+A Season that *stopped* agreeing would be a column shift or a swapped home and away, which agrees
+only where the score is symmetric — about a quarter of the time. `MIN_AGREEMENT` sits at 95%, in
+the gap between those two, and the worst real Season is 99.5%. Separately, the grading agrees with
+the tally MyFootballFacts keeps for itself: the page says "48 Correct Scores" for 2017/18 and this
+grading finds 48.
+
+**The shared calibration layer finally meets a Predictor it can help.** Stage 6 measured it costing
+every Predictor 0.0009–0.0015 RPS and CLAUDE.md asked for this to be re-measured rather than
+assumed. It is not close:
+
+| Predictor | Predictions | corrected | RPS | calibrated RPS | ten-bin error | calibrated |
+|---|---|---|---|---|---|---|
+| Lawrenson | 1,896 | 1,508 | 0.3341 | **0.2374** | 0.3270 | 0.0792 |
+| Sutton | 1,512 | 1,130 | 0.3343 | **0.2473** | 0.3386 | 0.0988 |
+
+On the Fixtures a fitted map actually reached, Lawrenson goes 0.3385 → **0.2169** against a Naive
+Baseline of 0.2381 on the same 1,508, and Sutton 0.3301 → **0.2137** against 0.2330 on the same
+1,130. So the layer takes a Predictor that is far below the floor as stated and lifts it above the
+floor — a gain of about 0.09 RPS where the other four paid about 0.001.
+
+**This confirms stage 6's diagnosis rather than contradicting it.** The layer was never broken; it
+had nothing to find. All four earlier Predictors arrive at a ten-bin calibration error of about
+0.006, and a monotone map fitted on that finds noise. A Pundit arrives at 0.33 — the most
+miscalibrated Prediction there is — and the same layer, unchanged, recovers most of it. The
+headline numbers stay pre-calibration for the reason ADR 0006 gives, and both columns stay
+published for the reason this row demonstrates.
+
+**None of this is the Calibrated Pundit.** Issue #12 fits a *different* map, bucketed by predicted
+goal margin so that a 3-0 call is treated as the stronger claim it is, on past calls only. The
+shared layer is generic and sees a one-hot Prediction as a two-valued input; the Calibrated Pundit
+sees the Scoreline. They must not be collapsed into each other, and the numbers above are not a
+preview of #12's.
+
 ## Open risks
 
 1. **BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.
 2. **The live path is only half tested.** Re-checked 21 Aug 2026: `fixtures.csv` is reachable and parses, but it still holds a single English row (one E2 fixture) and no E0 rows, and `mmz4281/2627/E0.csv` still does not exist. The transport is proven; the E0 live path is not. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — the check that must pass before a live Prediction Round can be sealed.
-3. **MyFootballFacts parseability is unverified.** Content correctness was confirmed — a 2025/26 result cross-checked exactly against Football-Data — but the HTML has not been parsed across all nine season pages.
+3. ~~**MyFootballFacts parseability is unverified.** Content correctness was confirmed — a 2025/26 result cross-checked exactly against Football-Data — but the HTML has not been parsed across all nine season pages.~~ **Closed at stage 7.** All nine parse, yielding **3,408 calls** of a possible 3,420, and the cross-check went far past the one row the ticket asked for: the page prints the real score beside every call, and **3,402 of the 3,406 that carry one match Football-Data**, with the four exceptions named above. The HTML is hand-maintained and reads like it — annotated names, six misspellings, two Scorelines dropped inside a Club's name, and which table holds the predictions moving between pages — so the parser recognises a call by its shape rather than by where it sits, and refuses a page that yields fewer than 360 or more than 420. `tests/pundits/test_over_the_corpus.py` re-derives all of it.
 4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.

@@ -38,9 +38,9 @@ FOUNDATIONS = (
 
 #: The modules that are still documented shells. Each is removed from here as its stage is built:
 #: ingest and clubs by tickets 2-4, metrics by ticket 6, the ledger and the Naive Baseline half of
-#: benchmarks by ticket 7, the Market Line and Ceiling Line half of it by ticket 8, and Elo through
-#: an ordered logit by ticket 9.
-UNBUILT = ("epl.pundits", "epl.simulate")
+#: benchmarks by ticket 7, the Market Line and Ceiling Line half of it by ticket 8, Elo through an
+#: ordered logit by ticket 9, and the Pundit backfill by ticket 11.
+UNBUILT = ("epl.simulate",)
 
 
 @pytest.mark.parametrize("name", MODULES)

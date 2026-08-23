@@ -19,6 +19,9 @@ where = ["src"]
 # The canonical Club table and its Aliases are data that ships with the code (CONTEXT.md: aliases
 # are data, never model code).
 "epl.clubs" = ["*.csv"]
+# The Pundit backfill is frozen and committed rather than re-scraped on every run (issue #11), so
+# it ships the same way.
+"epl.pundits" = ["*.csv"]
 
 [tool.ruff]
 line-length = 100

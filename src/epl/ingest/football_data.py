@@ -26,6 +26,7 @@ from pathlib import Path
 import pandas as pd
 
 from epl.clubs import ClubResolver
+from epl.ingest import cache
 from epl.ingest.fetcher import Fetcher, default_fetcher
 from epl.paths import processed_dir, raw_dir
 from epl.windows import FIRST_SEASON, LAST_SEASON, season_label
@@ -198,43 +199,20 @@ def fetch_season(
     whose upstream file grows weekly and backfills results and odds into rows already published -
     which is precisely why live Predictions are sealed rather than regenerated (ADR 0005).
 
-    That same backfilling is why a refresh does not simply overwrite. If the new bytes differ from
-    the cached ones, the cached copy is moved aside into ``superseded/`` first. Otherwise
-    refreshing would destroy the only record of what upstream said when a Sealed Prediction was
-    made, and the ledger's whole claim is that such a record exists.
+    That same backfilling is why a refresh does not simply overwrite; :func:`epl.ingest.cache.store`
+    archives the cached copy into ``superseded/`` first.
     """
     path = raw_season_path(season, division)
     if path.exists() and not refresh:
         return path
 
     fetcher = fetcher or default_fetcher(timeout)
-    content = fetcher(season_csv_url(season, division))
-    _supersede(path, content)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    return path
+    return cache.store(path, fetcher(season_csv_url(season, division)))
 
 
 def superseded_dir(season: int, division: str) -> Path:
     """Where earlier copies of a Season file go when a refresh brings different bytes."""
-    return raw_season_path(season, division).parent / "superseded"
-
-
-def _supersede(path: Path, new_content: bytes) -> Path | None:
-    """Move ``path`` aside if ``new_content`` would change it. Returns the archived path, if any.
-
-    Named for what ADR 0005 says to do with a Prediction that turns out wrong: supersede it, never
-    rewrite it. The same rule applies to the bytes a Prediction was made from.
-    """
-    if not path.exists() or path.read_bytes() == new_content:
-        return None
-
-    fetched_at = dt.datetime.fromtimestamp(path.stat().st_mtime, tz=dt.UTC)
-    archive = path.parent / "superseded" / f"{path.stem}_{fetched_at:%Y%m%dT%H%M%SZ}{path.suffix}"
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    archive.write_bytes(path.read_bytes())
-    return archive
+    return cache.superseded_dir(raw_season_path(season, division))
 
 
 def fetch_all(

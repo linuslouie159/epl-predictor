@@ -79,3 +79,27 @@ Three things follow, and none of them changes the decision:
   (ADR 0003) publishes `[1, 0, 0]`, which is the most miscalibrated Prediction there is. Issue #11
   is where this layer has something real to correct, and where these numbers should be measured
   again rather than assumed to hold.
+
+## Re-measured at stage 7 (issue #11, 23 Aug 2026)
+
+The layer met a Predictor that needed it, and none of the numbers above survived contact:
+
+| Predictor | Predictions | corrected | RPS | calibrated RPS | ten-bin error | calibrated |
+|---|---|---|---|---|---|---|
+| Lawrenson, as-stated | 1,896 | 1,508 | 0.3341 | **0.2374** | 0.3270 | 0.0792 |
+| Sutton, as-stated | 1,512 | 1,130 | 0.3343 | **0.2473** | 0.3386 | 0.0988 |
+
+A gain of about 0.09 RPS, where the four Predictors above paid about 0.001. On the Fixtures a
+fitted map actually reached, Lawrenson goes 0.3385 → 0.2169 against a Naive Baseline of 0.2381 over
+the same 1,508 — so the layer takes a Predictor that is far below the floor as stated and lifts it
+above the floor.
+
+**This confirms the diagnosis rather than overturning it.** The layer was never broken; it had
+nothing to find. All four earlier Predictors arrive at a ten-bin error of about 0.006, and a
+monotone map fitted on that finds noise. A Pundit arrives at 0.33 and the same unchanged layer
+recovers most of it. Nothing above changes: the headline numbers stay pre-calibration, and both
+columns keep being published — which is now what makes this row visible as well as that tax.
+
+None of this is the Calibrated Pundit. That map is bucketed by predicted goal margin and is fitted
+on a Pundit's own past calls (ADR 0003, issue #12); this one sees a one-hot input with no Scoreline
+in it. They must not be collapsed into each other.

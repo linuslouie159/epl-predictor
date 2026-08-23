@@ -34,7 +34,7 @@ from epl.windows import EVALUATION_WINDOW
 
 #: Importing these is what puts Predictors on the scoreboard. Each later stage adds its own —
 #: ``epl.models`` at issue #9, ``epl.pundits`` at issue #11.
-PREDICTOR_PACKAGES: tuple[str, ...] = ("epl.benchmarks", "epl.models")
+PREDICTOR_PACKAGES: tuple[str, ...] = ("epl.benchmarks", "epl.models", "epl.pundits")
 
 
 def main(argv: list[str] | None = None) -> int:

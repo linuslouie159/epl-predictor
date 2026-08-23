@@ -14,12 +14,35 @@ class TestMapping:
     def test_every_mapped_spelling_yields_a_club_and_an_alias(self) -> None:
         clubs, aliases = build.clubs_and_aliases()
         assert len(clubs) == len(build.FOOTBALL_DATA)
-        assert len(aliases) == len(build.FOOTBALL_DATA) + len(build.FIXTURES_VARIANTS)
+        assert len(aliases) == (
+            len(build.FOOTBALL_DATA)
+            + len(build.FIXTURES_VARIANTS)
+            + len(build.MYFOOTBALLFACTS)
+        )
 
-    def test_the_fixtures_variants_point_at_real_clubs(self) -> None:
+    def test_a_second_source_adds_spellings_and_never_a_club(self) -> None:
+        """Only Football-Data covers the whole pyramid, so only it can introduce a Club."""
+        clubs, _ = build.clubs_and_aliases()
+        assert len(clubs) == len(build.FOOTBALL_DATA)
+
+    @pytest.mark.parametrize("mapping", ["FIXTURES_VARIANTS", "MYFOOTBALLFACTS"])
+    def test_the_extra_spellings_point_at_real_clubs(self, mapping: str) -> None:
         clubs, _ = build.clubs_and_aliases()
         slugs = {club.slug for club in clubs}
-        assert set(build.FIXTURES_VARIANTS.values()) <= slugs
+        assert set(getattr(build, mapping).values()) <= slugs
+
+    def test_the_pundit_source_name_still_matches_the_module_that_owns_it(self) -> None:
+        """`build.PUNDIT_SOURCE` is written out rather than imported, because importing it would
+        register two Predictors as a side effect of rebuilding the Club table. Written out, it can
+        drift — so the check is made here, where importing the package is harmless."""
+        from epl.pundits.myfootballfacts import SOURCE as owned_by_the_parser
+
+        assert build.PUNDIT_SOURCE == owned_by_the_parser
+
+    def test_the_pundit_spellings_cover_the_clubs_of_nine_premier_league_seasons(self) -> None:
+        """MyFootballFacts publishes 2017/18-2025/26 and no lower tier, and those nine Seasons
+        field 32 Clubs between them. A lower-tier Club here would be a spelling nothing asks for."""
+        assert len(set(build.MYFOOTBALLFACTS.values())) == 32
 
     def test_slugs_are_unique(self) -> None:
         slugs = [slug for slug, _ in build.FOOTBALL_DATA.values()]
@@ -97,9 +120,11 @@ class TestCli:
         payload = json.loads(export.read_text(encoding="utf-8"))
 
         by_slug = dict(zip(load_clubs()["slug"], load_clubs()["name"], strict=True))
+        # One source at a time: the export is soccerdata's file for Football-Data, and the Alias
+        # table now also holds MyFootballFacts' spellings for the Pundit backfill (issue #11).
         differing = {
             by_slug[row.slug]
             for row in load_aliases().itertuples()
-            if row.alias != by_slug[row.slug]
+            if row.source == build.SOURCE and row.alias != by_slug[row.slug]
         }
         assert set(payload) == differing

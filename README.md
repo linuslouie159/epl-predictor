@@ -19,10 +19,17 @@ Measured on the Evaluation Window (2005/06–2025/26, 7,980 Fixtures):
 | **Target** | **≤ 0.1986** | market + 0.005 — this is success |
 | Market Line | 0.1936 | the opponent |
 | Ceiling Line | 0.1968* | reference only; knows team news we don't |
+| Lawrenson, as-stated | 0.3341† | a published Scoreline taken literally |
+| Sutton, as-stated | 0.3343† | the same, 2022/23 onward |
 
 \* over its own 2,660 Fixtures from 2019/20, not the 7,980 above — the two numbers are not
 comparable. On the Fixtures they share, the Market Line scores 0.1981 and the Ceiling Line beats it
 by 0.0013 RPS, which is what a few hours of team news is worth.
+
+† over the 1,896 and 1,512 Fixtures each Pundit called, and **not a verdict on either of them**. A
+Scoreline read as `[1, 0, 0]` is a claim of certainty nobody made, which is what makes this number
+worse than the floor while the same calls pick the right Outcome 51% and 49% of the time — seven
+points above the floor and four behind the market. See [Pundits](#pundits).
 
 The system does **not** need to beat the market. It needs to be leak-free, well calibrated, and
 within a stated distance of the market while beating the Naive Baseline and the Pundits.
@@ -50,7 +57,7 @@ Hyperparameters are tuned only on the Burn-In Window (2000/01–2004/05) and fro
 |---|---|---|
 | Football-Data.co.uk `E0`–`E3` | results, match stats, odds | 2000/01– , four tiers |
 | Football-Data.co.uk `fixtures.csv` | upcoming Fixtures + Market Line | rolling ~1 week |
-| MyFootballFacts | Pundit backfill (Lawrenson, Sutton) | 2017/18–2025/26, ~3,420 rows |
+| MyFootballFacts | Pundit backfill (Lawrenson, Sutton) | 2017/18–2025/26, 3,408 rows, frozen |
 | BBC Sport | live Pundit predictions | current Season |
 
 Odds column availability is era-dependent and this matters: no odds at all before 2002/03,
@@ -95,13 +102,14 @@ src/epl/windows.py      Season identity, Burn-In and Evaluation Windows
 src/epl/rounds.py       the As-Of Instant rule and Prediction Rounds
 src/epl/predictors.py   the Predictor contract, the Evidence a Predictor sees, the registry
 src/epl/calibration.py  the shared isotonic layer every Predictor's output passes through
-src/epl/ingest/         football-data, pundit scrapers
+src/epl/ingest/         football-data fetch + clean; the raw cache write rule (cache.py)
 src/epl/clubs/          canonical Club table + Alias resolution
 src/epl/metrics/        RPS, Brier, log loss, calibration measured
 src/epl/models/         elo.py, ordered_logit.py, burn_in.py; dixon-coles
 src/epl/benchmarks/     market line + ceiling line (vig.py), naive baseline
 outputs/overround.csv   the margin in each book per Season; regenerable, gitignored
-src/epl/pundits/        grading + Calibrated Pundit
+src/epl/pundits/        myfootballfacts.py, dataset.py, grading.py, predictor.py
+src/epl/pundits/predictions.csv   the frozen backfill: 3,408 calls, committed with the code
 src/epl/simulate/       Bayesian fit + Monte Carlo Season Projection
 src/epl/ledger/         Prediction stores, the row audit, the scoreboard
 outputs/backtest/       regenerable, gitignored — one file per Predictor
@@ -202,8 +210,9 @@ pytest --run-network    # also hits football-data.co.uk
 ```
 
 Tests marked `cache` re-derive the measured facts in [docs/DECISIONS.md](./docs/DECISIONS.md) from
-the ingested corpus rather than trusting them, and skip when `data/raw/` is absent. Tests marked
-`network` check that upstream still serves the shapes the live loop assumes.
+the ingested corpus rather than trusting them, and skip when `data/raw/` is absent — including the
+nine cached Pundit pages, which `python -m epl.pundits fetch` puts there. Tests marked `network`
+check that upstream still serves the shapes the live loop assumes.
 
 ## Predictions, the ledger and the scoreboard
 
@@ -373,3 +382,49 @@ Nothing is stored. A calibrated Prediction is a function of a stored Prediction 
 that happened after it*, so it is derived at scoring time — no row in either ledger store knows an
 Outcome, and that is what makes a leaked Prediction distinguishable from a recorded one
 ([ADR 0005](./docs/adr/0005-split-prediction-ledger.md)).
+
+## Pundits
+
+Nine Seasons of published Scorelines, collected from MyFootballFacts' archive of the BBC column and
+**committed as a frozen dataset** at `src/epl/pundits/predictions.csv`, so the accountability
+feature is backtestable on a fresh clone rather than in a year's time. Mark Lawrenson worked
+2017/18–2021/22 and Chris Sutton 2022/23–2025/26; they are two named Predictors, not one pundit
+slot, and each `covers` only the Seasons they worked.
+
+```
+python -m epl.pundits fetch    # cache the nine archive pages
+python -m epl.pundits build    # parse, reconcile with the corpus, freeze predictions.csv
+python -m epl.pundits grades   # exact-score and correct-Outcome rates per Pundit and Season
+```
+
+**3,408 calls of a possible 3,420.** Only facts are stored — Fixture, predicted Scoreline, Pundit,
+date. No prose, no matchday heading, and not the result: a stored Prediction that knew its own
+Outcome is what [ADR 0005](./docs/adr/0005-split-prediction-ledger.md) exists to prevent. The result
+*is* read at build time, to check the parse against Football-Data — 3,402 of the 3,406 calls that
+carry one agree — and then discarded.
+
+| | Calls | Exact score | Correct Outcome | RPS as-stated |
+|---|---|---|---|---|
+| Lawrenson | 1,896 | 11.0% | 50.9% | 0.3341 |
+| Sutton | 1,512 | 9.1% | 49.2% | 0.3343 |
+
+Both readings are published because each alone is an argument
+([ADR 0003](./docs/adr/0003-calibrated-pundit-predictor.md)). On the Fixtures they called, the
+Market Line scores 0.1946 and 0.1968 and the Naive Baseline 0.2356 and 0.2319 — so as-stated, a
+Pundit is a tenth of a point *below the floor*. On accuracy, which asks who they picked rather than
+how sure they claimed to be, the same calls beat the floor by seven points and trail the market by
+four. Nothing about the Pundit changes between those two sentences; only the question does. That is
+the cost of stating certainty, and the fair reading is the Calibrated Pundit at issue #12.
+
+The shared calibration layer, which costs every other Predictor about 0.001 RPS, **gains a Pundit
+about 0.09** — 0.3341 → 0.2374 and 0.3343 → 0.2473. That is the first Predictor it has had anything
+real to correct, and it confirms rather than contradicts the finding in
+[Calibration](#calibration): the layer works, and the other four were already well calibrated.
+
+Parsing nine pages of hand-maintained HTML is not tidy, and none of it is guessed at. Names carry
+annotations (`Chelsea*`, `Crystal Palace (19th May)`) which are stripped, and genuine misspellings
+(`Wolverhampton Wand`) which are Alias rows. Fifteen Fixtures were postponed, re-listed and called
+twice; the call published for the date the Fixture was actually played is the one that stands.
+Twelve Fixtures were never listed at all, and `covers` keeps them off the ledger rather than
+inventing a Prediction. Every one of those is named and re-derived in
+`tests/pundits/test_over_the_corpus.py`.

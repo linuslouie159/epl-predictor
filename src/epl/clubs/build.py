@@ -155,12 +155,75 @@ FIXTURES_VARIANTS = {
     "Bradford City": "bradford",
 }
 
+# The source name MyFootballFacts' spellings are registered under.
+#
+# Spelled out rather than imported from `epl.pundits.myfootballfacts`, which is where it is defined.
+# Importing it would run `epl.pundits/__init__`, and that **registers two Predictors** — so
+# rebuilding the Club table would have ledger-registry side effects, and this tooling module would
+# drag a stage-7 package into a stage-1 job. `tests/clubs/test_build.py` asserts the two strings
+# still agree, which is the same trade the Ceiling Line makes with its column list (ADR 0001).
+PUNDIT_SOURCE = "myfootballfacts"
+
+# MyFootballFacts' spellings -> slug, for the Pundit backfill (issue #11). Premier League Clubs
+# only: the archive covers 2017/18-2025/26, and the site has never published a lower tier.
+#
+# Every one of these was observed in the nine pages rather than derived from a rule, which is why
+# the six short ones are here. `Wolverhampton W` and `Brighton & Hove Alb` are the source
+# genuinely misspelling a Club, and a spelling is exactly what this table holds. The annotations
+# the pages also carry — a trailing `*`, or `(14.02)` naming a rearranged date — are *not*
+# spellings, and `epl.pundits.myfootballfacts` strips them before it asks for a slug.
+MYFOOTBALLFACTS = {
+    "AFC Bournemouth": "bournemouth",
+    "Arsenal": "arsenal",
+    "Aston Villa": "aston_villa",
+    "Brentford": "brentford",
+    "Brighton & Hove A": "brighton",
+    "Brighton & Hove Alb": "brighton",
+    "Brighton & Hove Albion": "brighton",
+    "Brighton Hove Albion": "brighton",
+    "Burnley": "burnley",
+    "Cardiff City": "cardiff",
+    "Chelsea": "chelsea",
+    "Crystal Palace": "crystal_palace",
+    "Everton": "everton",
+    "Fulham": "fulham",
+    "Huddersfield Town": "huddersfield",
+    "Ipswich Town": "ipswich",
+    "Leeds United": "leeds",
+    "Leicester City": "leicester",
+    "Liverpool": "liverpool",
+    "Luton Town": "luton",
+    "Manchester City": "man_city",
+    "Manchester United": "man_united",
+    "Newcastle United": "newcastle",
+    "Norwich City": "norwich",
+    "Nottingham Forest": "nottm_forest",
+    "Sheffield United": "sheffield_united",
+    "Southampton": "southampton",
+    "Stoke City": "stoke",
+    "Sunderland": "sunderland",
+    "Swansea City": "swansea",
+    "Tottenham Hotspur": "tottenham",
+    "Watford": "watford",
+    "West Bromwich Alb": "west_brom",
+    "West Bromwich Albion": "west_brom",
+    "West Ham United": "west_ham",
+    "Wolverhampton W": "wolves",
+    "Wolverhampton Wand": "wolves",
+    "Wolverhampton Wanderers": "wolves",
+}
+
 
 def clubs_and_aliases() -> tuple[list[Club], list[tuple[str, str, str]]]:
-    """The Club table and Alias rows the mapping above implies."""
+    """The Club table and Alias rows the mappings above imply.
+
+    Clubs come from Football-Data alone, because it is the only source that covers the whole
+    pyramid. A second source adds spellings of Clubs that already exist, never a Club.
+    """
     clubs = {slug: Club(slug, name) for slug, name in FOOTBALL_DATA.values()}
     aliases = [(SOURCE, alias, slug) for alias, (slug, _) in FOOTBALL_DATA.items()]
     aliases += [(SOURCE, alias, slug) for alias, slug in FIXTURES_VARIANTS.items()]
+    aliases += [(PUNDIT_SOURCE, alias, slug) for alias, slug in MYFOOTBALLFACTS.items()]
 
     unknown = sorted({slug for _, _, slug in aliases} - set(clubs))
     if unknown:
