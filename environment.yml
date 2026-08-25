@@ -32,6 +32,15 @@ dependencies:
   - scipy
   - scikit-learn
 
+  # OpenBLAS rather than conda-forge's default BLAS provider, and this one is load-bearing.
+  # Solved without it on 24 Aug 2026, conda picked MKL 2026 — whose Intel-OpenMP threading layer
+  # cannot resolve its symbols against the `libiomp5md.dll` shim that llvm-openmp 22 supplies. The
+  # failure is not a warning or a slow path: every LAPACK call aborts the interpreter outright with
+  # 0xc06d007f, which takes `numpy.linalg`, `scipy.linalg`, L-BFGS-B (and so the Dixon-Coles fit)
+  # and PyMC with it. Pinned rather than left floating for the reason arviz is: this is a place
+  # where a free version choice breaks the build rather than merely drifting.
+  - libblas=*=*openblas
+
   # Reliability diagrams and scoreboard plots
   - matplotlib
 

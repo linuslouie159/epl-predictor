@@ -57,3 +57,8 @@ outputs/three_way.csv
 outputs/certainty.csv
 outputs/pundit_calls.csv
 outputs/margin_map.csv
+
+# What `python -m epl.models sequential` publishes: every Fixture predicted from its Prediction
+# Round and again from its own kickoff. ADR 0002's diagnostic, derived and regenerable like the
+# rest — and never a Prediction this project made, which is the other reason it is not evidence.
+outputs/sequential.csv

@@ -43,6 +43,10 @@ Added at stage 1:
 - **ruff and mypy** are in `environment.yml` and configured in `pyproject.toml`, so style and typing are tooling concerns rather than review concerns.
 - **`arviz` is pinned below 1.0.** arviz 1.x moved to xarray's DataTree and removed `InferenceData`, which pymc 5.x imports at load; solved unpinned, `import pymc` fails outright. `gxx` is likewise pinned in, because without it PyTensor silently falls back to a slow Python implementation — the exact failure ADR 0009 chose conda-forge to avoid.
 
+Added at stage 9:
+
+- **The BLAS provider is pinned to OpenBLAS**, and it is load-bearing rather than a preference. Solved without the pin on 24 Aug 2026, conda picks MKL 2026, whose Intel-OpenMP threading layer cannot resolve its symbols against the `libiomp5md.dll` shim that llvm-openmp 22 supplies. The failure is not a warning or a slow path: every LAPACK call aborts the interpreter with `0xc06d007f`, taking `numpy.linalg`, `scipy.linalg`, L-BFGS-B — and so the Dixon-Coles fit — and PyMC with it. Found while building stage 9, and it would have blocked #14 as surely as #13. This is the second place a free version choice breaks the build rather than merely drifting; `arviz` above is the first.
+
 ## Measured facts
 
 Derived from the source data during design. Recorded so they need not be re-derived — but re-verify
@@ -91,6 +95,7 @@ There is **no xG anywhere** in Football-Data. Understat starts 2014/15; FBref ad
 |---|---|
 | Naive Baseline (H 45.6% / D 24.3% / A 30.1%) | 0.2292 |
 | Elo through an ordered logit | 0.19943 |
+| Dixon-Coles by MLE | 0.19752 |
 | Market Line, normalised | 0.19379 |
 | Market Line, Shin | 0.19362 |
 | Market Line, power | 0.19359 |
@@ -637,6 +642,139 @@ same boldness missing, where the as-stated reading scored a flat 1.00. Lawrenson
 Tottenham 3-0 Huddersfield (0.004) and his worst 2018/19 Bournemouth 3-0 Fulham (0.890), which
 Fulham won; Sutton's are 2023/24 Arsenal 3-0 Burnley (0.017) and 2023/24 Liverpool 3-0 Crystal
 Palace (0.774), which Palace won.
+
+## Dixon-Coles by maximum likelihood
+
+Added at stage 9 (issue #13), the first model that predicts goals. `epl.models.likelihood` is the
+likelihood, the weighted sample and the Scoreline grid; `epl.models.dixon_coles` is the maximum-
+likelihood fit and the Predictor over it; `epl.models.burn_in.fit_decay` is where the one
+hyperparameter is chosen.
+
+- **One likelihood, in a module that knows nothing about optimisers or Predictors.** ADR 0007's
+  whole justification for fitting one model two ways is that "both paths share one likelihood
+  function, so the models cannot drift apart", and a shared function that lived inside the MLE path
+  would be shared only until someone needed it to be. `epl.models.likelihood` holds the rates, the
+  low-score correction, the decay and the Scoreline grid, and imports nothing from either fit;
+  `epl.simulate` (issue #14) is expected to fit the same `Sample` and return the same `Strengths`.
+- **The whole pyramid again, and this time it was measured rather than inherited.** ADR 0004 is an
+  argument about Elo, and Elo is zero-sum: a rating carried across a promotion is comparable by
+  construction. This model has no such guarantee — no Club ever plays outside its own tier, so
+  nothing in the likelihood knows a division exists and the four tiers are joined *only* by the
+  Clubs that changed tier inside the decay horizon. Fitting all four scores **0.20165** on the
+  Burn-In Window against a Premier-League-only **0.20382**, and the bridge holds: at the first
+  scored round mean attack falls monotonically E0 → E3 (+0.45, +0.11, −0.09, −0.31), and it still
+  does in 2015/16 and 2025/26. Nothing orders those tiers; the promoted Clubs do.
+- **The half-life is a well-determined region, not a well-determined number.** 322.5 days is what
+  the grid finds, and anything from 270 to 480 days scores within 0.0001 RPS of it. What the data
+  *does* exclude is the short end: a 60-day half-life costs 0.007 RPS, because a fit that remembers
+  two months is fitting form rather than strength.
+- **The weight floor is a tolerance and was checked to be one.** It decides how far back a sample
+  reaches, which makes it look like a hyperparameter. Five times the floor — 0.05 instead of 0.01,
+  a horizon of 1,394 days instead of 2,143 — moves the Burn-In score by 0.00001 RPS. It is stated
+  rather than fitted, and `tests/models/test_dixon_coles_over_the_corpus.py` re-derives that.
+- **Dixon-Coles' low-score correction has all but vanished from this corpus, and is kept anyway.**
+  The 1997 paper fitted about −0.13 on four Seasons of one division. Here the fitted value wanders
+  around zero and changes sign — −0.058 at the first scored round, +0.003 in 2015/16, −0.010 in
+  2025/26 — and pinning it at zero, which is two independent Poissons, costs **0.00011 RPS**. It
+  stays for two reasons: it is a parameter of the shared likelihood rather than a hyperparameter, so
+  dropping it would change the model rather than simplify the code; and 0.00011 in the right
+  direction is a measurement, not nothing. It is emphatically *not* why this model beats Elo.
+- **The fit is refitted from cold at every Prediction Round**, for the reason `epl.models.elo.Elo`
+  gives: a fit carried between calls would have to judge whether the Evidence it was handed extends
+  the one it fitted last, and getting that wrong is invisible. Here it is nearly free — about 300 ms
+  a round, five minutes for the whole Evaluation Window.
+- **The likelihood is flat along one direction, and the fit is put in a gauge before it leaves.**
+  Adding a constant to every attack *and* every defence changes no rate, so a fitted `Strengths` is
+  an arbitrary point on a line until `centred()` picks the one where the mean attack is zero. Two
+  fits are not comparable — and no attack table is readable — without it.
+- **The gradient is analytic and checked against central differences.** Two hundred parameters
+  differenced is two hundred extra evaluations per step, which is the difference between the five
+  minutes above and most of a day. A hand-written derivative that had drifted from its own function
+  would converge slightly wrong and look completely normal, so `tests/models/test_likelihood.py`
+  differences the very function it belongs to.
+- **A Club with no matches in the sample keeps neutral strengths rather than being dropped.** Zero
+  weight is zero gradient, so the optimiser leaves it where it started. The alternative makes a
+  Fixture unanswerable rather than uncertain. Over this corpus it reaches only the Clubs entering
+  League Two from outside the Football League, four tiers from anything scored.
+
+### Measured at stage 9 (24 Aug 2026)
+
+Re-derived on every run by `tests/models/test_dixon_coles_over_the_corpus.py`, which skips when
+`data/raw/` is absent.
+
+| Predictor | Fixtures | RPS | Brier | Log loss | Accuracy | Ten-bin error |
+|---|---|---|---|---|---|---|
+| Market Line | 7,980 | 0.19362 | 0.5684 | 0.9582 | 0.5471 | 0.0061 |
+| Ceiling Line | 2,660 | 0.19676 | 0.5717 | 0.9639 | 0.5498 | 0.0060 |
+| **Dixon-Coles** | **7,980** | **0.19752** | 0.5768 | 0.9707 | 0.5360 | 0.0080 |
+| Elo | 7,980 | 0.19943 | 0.5810 | 0.9771 | 0.5380 | 0.0055 |
+| Naive Baseline | 7,980 | 0.22938 | 0.6430 | 1.0642 | 0.4556 | 0.0061 |
+
+- **It clears the README's ≤0.1986 target**, which Elo missed by 0.0008, and it takes **0.0319 of
+  the 0.0358** RPS the market takes out of the floor — 89% of the available edge against Elo's 84%.
+  It is 0.0039 short of the market, and a goals model that *beat* the book on the book's own
+  information set would be evidence of a leak rather than of a good model.
+- **Reading the goals is worth 0.0019 RPS over reading the Outcomes**, which is the whole of what
+  issue #13 set out to find. Note it is not worth much on *accuracy* — 0.5360 against Elo's 0.5380,
+  slightly worse. The two models pick nearly the same winners; this one is better calibrated about
+  how sure it is, which is exactly what RPS measures and accuracy does not (CLAUDE.md).
+- **The shared calibration layer costs it 0.0004 RPS**, 0.19752 → 0.19793, against 0.0009 for Elo
+  and 0.0009 for the market. Stage 6's finding survives a fifth Predictor: the layer is not broken,
+  it has nothing to find. Its pre-calibration ten-bin error of 0.0080 is the highest of the four
+  full-window Predictors and still small.
+- **Playing at home is worth about a third of a goal, and falling.** +0.2964 log-goals at the first
+  scored round (x1.345), +0.2117 in 2015/16, +0.1972 in 2025/26. That is the same structural drift
+  ADR 0008 accepts by name, visible here in a unit anyone can read.
+- **A full walk takes about five minutes**, at 952 refits of roughly 230 parameters over some
+  12,000 weighted matches each. Issue #13 asked for "minutes rather than hours". A fit needs a mean
+  of 251 L-BFGS-B iterations and a worst of 1,454 over a 136-round sample, and the tail is longer
+  than that — one of the diagnostic's 3,130 per-kickoff cuts needed more than 2,000, which is why
+  the iteration ceiling sits at 10,000 rather than near the observed worst case. The tolerances are
+  untouched by that: measured over the same sample, the *objective* tolerance terminates every fit
+  and loosening the gradient tolerance tenfold does not change a single iteration.
+
+### What the weekly batch gives up (ADR 0002's diagnostic)
+
+`epl.ledger.backtest.sequential` predicts every Fixture twice with the same Predictor — once from
+its Prediction Round's As-Of Instant, exactly as the ledger stores it, and once from an Evidence cut
+at its own kickoff. ADR 0002 promised this measurement and forbade quoting it as a score; the
+`sequential_rps` column is what a model that broke the three-way comparison would get, and it is on
+the record so the size of the choice is known rather than argued about.
+
+| Predictor | Over | Fixtures | Batch RPS | Sequential RPS | Withheld |
+|---|---|---|---|---|---|
+| Elo | whole window | 7,980 | 0.19943 | 0.19942 | **+0.00001** |
+| Elo | 2019/20 on | 2,660 | 0.20525 | 0.20523 | **+0.00002** |
+| Dixon-Coles | whole window | 7,980 | 0.19752 | 0.19749 | **+0.00003** |
+| Dixon-Coles | 2019/20 on | 2,660 | 0.20343 | 0.20338 | **+0.00006** |
+
+**Withholding Saturday's results from Monday night's call costs essentially nothing** — 0.00001 RPS
+for Elo and 0.00003 for Dixon-Coles, two to three orders of magnitude below the 0.0019 that reading
+the goals is worth, and below the resolution anything in this project is reported at. ADR 0002
+traded accuracy for comparability and it turns out the trade was very nearly free. The goals model
+uses the withheld information about three times as well as Elo does, which is the ordering one would
+expect and is still nothing.
+
+The batch column reproduces each Predictor's scoreboard RPS exactly, which is what makes the two
+columns comparable at all: the diagnostic re-derives the stored Prediction rather than a different
+one.
+
+Two limits on that number, pointing opposite ways, and both in
+`epl.ledger.backtest.sequential`'s docstring. Football-Data records no kickoff time before 2019/20,
+so an untimed Fixture sits at midnight and cannot see the earlier kickoffs of its own day — which
+*understates* the gap over most of the window. And `Evidence` timestamps a match at its kickoff
+rather than its final whistle, so inside the timed era a 17:30 Fixture is handed the 16:00 match
+that was still being played — which *overstates* it. Both readings come out negligible, which is
+what makes this a finding rather than an artefact of missing timestamps. No attempt is made to
+sharpen the second: a match-length constant subtracted from every kickoff would be a hyperparameter
+invented to flatter a diagnostic.
+
+The Elo figures are re-derived by `tests/models/test_dixon_coles_over_the_corpus.py`. Elo is used
+there rather than Dixon-Coles as an economy — the question is about the As-Of rule, which is the
+same for every Predictor, and the walk takes one fit per distinct kickoff instead of one per round,
+3,130 of them against 952. Elo pays six minutes for the whole window where Dixon-Coles pays
+thirty-four, and half an hour inside a test suite is a test nobody runs. The Dixon-Coles row above
+came from `python -m epl.models sequential`.
 
 ## Open risks
 

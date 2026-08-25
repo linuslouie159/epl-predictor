@@ -25,6 +25,25 @@ Do not "fix" these without reading the linked ADR first:
 - **The model predicts weekly in batches** instead of per-fixture, deliberately using less information. [ADR 0002](./docs/adr/0002-weekly-prediction-rounds.md)
 - **26 seasons are ingested but only 21 are scored.** [ADR 0008](./docs/adr/0008-burn-in-prefix-frozen-hyperparameters.md)
 - **Dixon-Coles is fitted two different ways** — MLE and Bayesian. [ADR 0007](./docs/adr/0007-mle-for-matches-bayesian-for-projections.md)
+- **Dixon-Coles' likelihood lives apart from its fit**, in `epl.models.likelihood`, which knows
+  nothing about optimisers, Evidence or Predictors. That is ADR 0007's "both paths share one
+  likelihood function" made structural: issue #14's Bayesian fit imports it rather than restating
+  it. Do not fold it into `dixon_coles.py`.
+- **Dixon-Coles fits all four tiers too, and the reason is not Elo's.** Elo is zero-sum, so a
+  rating survives a promotion by construction; nothing in this likelihood knows a division exists,
+  and the tiers are joined only by the Clubs that changed tier inside the decay horizon. It was
+  therefore measured rather than inherited — 0.20165 against a Premier-League-only 0.20382 on the
+  Burn-In Window, with mean attack falling monotonically E0 → E3 at every checkpoint.
+- **Dixon-Coles' low-score correction comes out near zero and is kept anyway.** The 1997 paper's
+  −0.13 does not reproduce here: the fitted value wanders around zero and changes sign, and pinning
+  it at zero costs 0.00011 RPS. It stays because it belongs to the shared likelihood rather than to
+  this fit — deleting it would change the model, not simplify the code.
+- **`python -m epl.models sequential` produces a number that must never be quoted as a score.**
+  It is ADR 0002's promised diagnostic: every Fixture predicted from its round *and* from its own
+  kickoff, so the cost of the weekly batch is measured rather than argued. Its rows carry the
+  Outcome and are never written to either store. The answer is **+0.00001 RPS for Elo and +0.00003
+  for Dixon-Coles** — the comparability the weekly batch buys is very nearly free, which is a
+  happier result than ADR 0002 needed and does not license quoting the sequential column anywhere.
 - **The pundit's published scoreline is transformed before scoring.** [ADR 0003](./docs/adr/0003-calibrated-pundit-predictor.md)
 - **Two prediction stores exist, not one**, and one of them must never be rewritten. [ADR 0005](./docs/adr/0005-split-prediction-ledger.md)
 - **The Ceiling Line scores *worse* than the Market Line on the scoreboard** — 0.1968 against
@@ -41,6 +60,10 @@ Do not "fix" these without reading the linked ADR first:
 - **`epl.calibration` is at the top level, not in `epl.models`**, and older docstrings said
   otherwise. It is not a model, and putting it there would make `epl.models` and `epl.ledger`
   import each other. See docs/DECISIONS.md, "The shared calibration layer".
+- **The three-way board's model column is still Elo, not Dixon-Coles.** `epl.pundits.report.OPPONENTS`
+  is a *chosen* comparison of three named opponents rather than a view of the registry, so a new
+  Predictor reaches the scoreboard and does not silently rewrite the argument ADR 0003 is making.
+  Its docstring says so; do not "fix" it by reading the registry there.
 - **Four Pundit-derived Predictors are registered, not two**, and the two named for people are
   the *worse* pair. `lawrenson` and `sutton` are the as-stated readings; `margin_map_lawrenson` and
   `margin_map_sutton` are the Calibrated Pundits over the same calls. The maps are deliberately
@@ -67,6 +90,12 @@ Do not "fix" these without reading the linked ADR first:
   its whole rating pool at every one of the 952 Prediction Rounds** rather than folding one
   forward. Both are explained in `src/epl/models/__init__.py`; the second costs a minute per
   backfill and buys the one kind of leak this project cannot see.
+- **`environment.yml` pins the BLAS provider to OpenBLAS**, and that pin is load-bearing. Without
+  it conda selects MKL 2026, whose Intel-OpenMP threading layer cannot resolve its symbols against
+  the `libiomp5md.dll` shim llvm-openmp 22 supplies, and *every LAPACK call aborts the interpreter*
+  — `numpy.linalg`, `scipy.linalg`, L-BFGS-B and PyMC all die with `0xc06d007f`. It looks like an
+  arbitrary preference and is the second place after `arviz <1` where a free version choice breaks
+  the build rather than drifting. See docs/DECISIONS.md, "Added at stage 9".
 - **Refreshing a cached raw file archives the old bytes** into `superseded/` instead of replacing
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
   Both are explained where they live — `src/epl/ingest/cache.py`, which both the Football-Data
@@ -116,14 +145,22 @@ two named Predictors scored as-stated (`predictor.py`). 3,408 calls of a possibl
 **Stage 8 is built**: the Calibrated Pundit and the three-way scoreboard (`src/epl/pundits/margin.py`,
 `calibrated.py`, `report.py`, issue #12) — a published Scoreline reduced to its predicted goal
 margin and quoted what such a call has historically produced, fitted walk-forward on that Pundit's
-past calls only, registered as two more Predictors and reported beside the as-stated reading. The
-scoreboard now reads:
+past calls only, registered as two more Predictors and reported beside the as-stated reading.
+
+**Stage 9 is built**: Dixon-Coles by maximum likelihood (`src/epl/models/likelihood.py`,
+`dixon_coles.py`, issue #13) — one likelihood written once for both fits (ADR 0007), fitted at all
+952 scored Prediction Rounds over a time-decayed sample of all four tiers, producing Scoreline
+probabilities that collapse onto the same three Outcomes. **It scores 0.19752 RPS and clears the
+README's ≤0.1986 target**, which Elo missed by 0.0008. ADR 0002's per-Fixture diagnostic is built
+beside it (`epl.ledger.backtest.sequential`, `python -m epl.models sequential`). The scoreboard now
+reads:
 
 ```
 pre-calibration
            predictor  fixtures    rps  brier  log_loss  accuracy    ece
          market_line      7980 0.1936 0.5684    0.9582    0.5471 0.0061
         ceiling_line      2660 0.1968 0.5717    0.9639    0.5498 0.0060
+         dixon_coles      7980 0.1975 0.5768    0.9707    0.5360 0.0080
                  elo      7980 0.1994 0.5810    0.9771    0.5380 0.0055
    margin_map_sutton      1472 0.2111 0.6045    1.0137    0.4993 0.0200
 margin_map_lawrenson      1856 0.2127 0.6012    1.0092    0.5116 0.0195
@@ -135,6 +172,7 @@ post-calibration
            predictor  corrected    rps  brier  log_loss  accuracy    ece  correction
          market_line       7600 0.1945 0.5707    0.9931    0.5427 0.0124      0.0342
         ceiling_line       2280 0.1980 0.5755    0.9817    0.5445 0.0084      0.0328
+         dixon_coles       7600 0.1979 0.5782    0.9964    0.5400 0.0102      0.0378
                  elo       7600 0.2004 0.5836    1.0128    0.5353 0.0097      0.0307
    margin_map_sutton       1091 0.2126 0.6081    1.1261    0.5037 0.0162      0.0274
 margin_map_lawrenson       1468 0.2141 0.6043    1.1645    0.5110 0.0207      0.0317
@@ -143,7 +181,40 @@ margin_map_lawrenson       1468 0.2141 0.6043    1.1645    0.5110 0.0207      0.
               sutton       1130 0.2473 0.7230    5.3558    0.5033 0.0988      0.3841
 ```
 
-`epl.simulate` is still a documented shell, naming the issue that builds it.
+`epl.simulate` is still a documented shell, naming the issue that builds it — and now naming the
+likelihood that issue must reuse rather than rewrite.
+
+Seven things about stage 9 worth knowing before building on it:
+
+- **The 0.0019 it takes out of Elo does not show up on accuracy** — 0.5360 against Elo's 0.5380,
+  slightly *worse*. The two models pick nearly the same winners; the goals model is better
+  calibrated about how sure it should be, which is exactly what RPS measures and accuracy does not.
+  Do not report the accuracy column as though it disagreed with the headline.
+- **`epl.models.likelihood` is the seam ADR 0007 asks for, and it is deliberately ignorant.** It
+  holds `Sample`, `Decay`, `Strengths`, the log-likelihood with its analytic gradient, the
+  correction and the Scoreline grid — and imports nothing from `dixon_coles` or from any Predictor.
+  Issue #14 fits the same `Sample` and returns draws of the same `Strengths`.
+- **A fitted `Strengths` is meaningless until it is centred.** Adding a constant to every attack
+  *and* every defence changes no rate, so the likelihood is flat along one direction and a fit is
+  an arbitrary point on a line. `fit` applies `centred()` on the way out; two fits are not
+  comparable and no attack table is readable without it.
+- **The gradient is analytic, and the test that keeps it true differences the function itself.**
+  Two hundred parameters differenced is the difference between a five-minute backfill and most of
+  a day. A derivative that drifted from its own function would converge slightly wrong and look
+  entirely normal on the scoreboard.
+- **The half-life is a region, not a number.** 322.5 days is the fit; anything from 270 to 480
+  scores within 0.0001 RPS. The short end is what the data excludes — 60 days costs 0.007 RPS. And
+  the weight floor beneath it is a stated tolerance, not a knob: five times it moves the Burn-In
+  score by 0.00001.
+- **The iteration ceiling is 10,000 and was set from measurement.** A fit takes a mean of 251
+  L-BFGS-B iterations and a worst of 1,454 over a 136-round sample, but the tail is longer than
+  that: at a ceiling of 2,000 the per-Fixture diagnostic found a cut that needed more, and the run
+  died on it. A ceiling near the observed worst case turns a slow fit into a failed run. The
+  tolerances were not touched — the *objective* tolerance is what terminates every fit, and
+  loosening the gradient tolerance tenfold changes not one iteration count.
+- **The backfill now takes about six minutes**, five of them Dixon-Coles refitting ~230 parameters
+  at each of 952 rounds. `python -m epl.models fit` takes several minutes more, because a half-life
+  can only be judged by predicting with it and every candidate walks the Burn-In rounds.
 
 Five things about stage 8 worth knowing before building on it:
 
@@ -302,14 +373,18 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Issue #13 — Dixon-Coles** is the only remaining way to close the 0.0058 gap to the market, since
-the calibration layer turned out to cost rather than buy. It is also the one that unblocks the
-Season Projection (goal difference, ADR 0007). Nothing in stage 8 changes that: a Calibrated Pundit
-is a Pundit-accountability artifact, not a model of football, and it sits between Elo and the floor.
+**Issue #14 — the Bayesian Dixon-Coles posterior**, which stage 9 unblocked and which is the only
+thing standing between here and a Season Projection (#15). It belongs in `epl.simulate`, and the
+one rule that matters is ADR 0007's: it fits the *same* `epl.models.likelihood.Sample` and returns
+draws of the *same* `Strengths`. A second likelihood is the failure mode that ADR exists to prevent.
 
 Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
 unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage
 lands and there is no appetite to start the next one.
+
+The model target is met, so there is no longer a pending question about accuracy. What is left open
+is the *live* half — #16 (BBC Pundit spike) and #17 (sealing a round before kickoff), which are
+where open risks 1 and 2 live.
 
 Check the graph before starting:
 
@@ -334,10 +409,14 @@ python -m epl.ledger reliability     # the 10-bin diagrams per Predictor, in bot
 python -m epl.ledger audit     # re-check both stores and the seal on outputs/live/
 python -m epl.benchmarks overround   # the margin in each book, per Season and tier
 python -m epl.benchmarks methods     # the three vig removals compared on one book
-python -m epl.models fit       # re-derive the frozen hyperparameters on the Burn-In Window
+python -m epl.models fit       # re-derive both frozen fits on the Burn-In Window
 python -m epl.models draws     # the draw rate against Supremacy, predicted and observed
-python -m epl.models ratings   # the pool at a Season's first Prediction Round
+python -m epl.models ratings   # the Elo pool at a Season's first Prediction Round
+python -m epl.models strengths # Dixon-Coles' attack and defence at the same instant
+python -m epl.models sequential      # ADR 0002's diagnostic: per Fixture against per round
 pytest                         # add --run-network to also hit football-data.co.uk
 ```
 
-`backfill` now takes about a minute: Elo rebuilds its pool at every round on purpose (see above).
+`backfill` now takes about six minutes, five of them Dixon-Coles: both models rebuild from cold at
+every round on purpose (see above). `python -m epl.models sequential` is several times that again,
+and `--seasons FIRST LAST` is how to want less of it.

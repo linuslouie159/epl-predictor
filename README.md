@@ -17,6 +17,7 @@ Measured on the Evaluation Window (2005/06–2025/26, 7,980 Fixtures):
 | Naive Baseline | 0.2294 | the floor — beat this or the model has no value |
 | Elo | 0.1994 | the first real model, built |
 | **Target** | **≤ 0.1986** | market + 0.005 — this is success |
+| **Dixon-Coles** | **0.1975** | the goals model, built — **target met** |
 | Market Line | 0.1936 | the opponent |
 | Ceiling Line | 0.1968* | reference only; knows team news we don't |
 | Margin Map (Lawrenson's calls) | 0.2127‡ | the same calls read fairly |
@@ -42,9 +43,13 @@ The system does **not** need to beat the market. It needs to be leak-free, well 
 within a stated distance of the market while beating the Naive Baseline and the Pundits.
 
 Elo alone takes **0.030 of the 0.036 RPS** the market takes out of the floor — 84% of the available
-edge from ratings and nothing else. The 0.0008 it still sits above the target now rests on
-Dixon-Coles alone: the shared calibration layer is built and measured, and it makes every Predictor
-on this board slightly *worse* (see [Calibration](#calibration)).
+edge from ratings and nothing else. Reading the goals rather than the Outcomes takes **0.032, or
+89%**, and clears the target Elo missed by 0.0008. A model that *beat* the market here would be
+evidence of a leak, not of a good model.
+
+Interestingly, that 0.0019 does not show up on accuracy: Dixon-Coles picks the winner slightly
+*less* often than Elo, 53.6% against 53.8%. The two agree about who wins; the goals model is better
+calibrated about how sure it should be, which is what RPS measures and accuracy does not.
 
 Every number above is pre-calibration, which is the better of the two columns the scoreboard
 publishes and the one a Predictor earned.
@@ -112,7 +117,9 @@ src/epl/calibration.py  the shared isotonic layer every Predictor's output passe
 src/epl/ingest/         football-data fetch + clean; the raw cache write rule (cache.py)
 src/epl/clubs/          canonical Club table + Alias resolution
 src/epl/metrics/        RPS, Brier, log loss, calibration measured
-src/epl/models/         elo.py, ordered_logit.py, burn_in.py; dixon-coles
+src/epl/models/         elo.py, ordered_logit.py, burn_in.py
+src/epl/models/likelihood.py    the Dixon-Coles likelihood both fits share (ADR 0007)
+src/epl/models/dixon_coles.py   the maximum-likelihood fit and the Predictor over it
 src/epl/benchmarks/     market line + ceiling line (vig.py), naive baseline
 outputs/overround.csv   the margin in each book per Season; regenerable, gitignored
 src/epl/pundits/        myfootballfacts.py, dataset.py, grading.py, predictor.py
@@ -123,6 +130,7 @@ outputs/three_way.csv   the board over each Pundit's shared Fixtures; regenerabl
 outputs/certainty.csv   the two readings and the gap between them; regenerable, gitignored
 outputs/pundit_calls.csv  every call ranked by miss; regenerable, gitignored
 outputs/margin_map.csv  what a call of each margin is worth; regenerable, gitignored
+outputs/sequential.csv  every Fixture predicted per round and per kickoff; regenerable, gitignored
 src/epl/simulate/       Bayesian fit + Monte Carlo Season Projection
 src/epl/ledger/         Prediction stores, the row audit, the scoreboard
 outputs/backtest/       regenerable, gitignored — one file per Predictor
@@ -145,6 +153,11 @@ pip and venv.
 conda env create -f environment.yml
 conda activate epl-predictor
 ```
+
+Two pins in there are load-bearing rather than preferences, and both break the build outright rather
+than drifting: `arviz <1`, without which `import pymc` fails, and **`libblas=*=*openblas`**, without
+which conda selects MKL 2026 and every LAPACK call aborts the interpreter — taking `numpy.linalg`,
+`scipy.linalg`, L-BFGS-B and PyMC with it. See docs/DECISIONS.md, "Added at stage 9".
 
 ## Running the ingest
 
@@ -340,10 +353,78 @@ on. What it found — K 28.5, home advantage 80 rating points, a logit scale of 
 of ±0.6232 — is frozen as literals in `models/elo.py`, and `python -m epl.models fit` prints the
 fit beside them so the two cannot drift apart in silence.
 
+## Dixon-Coles
+
+The goals model, and the first Predictor to clear the target. Each Club gets an attack and a
+defence, the home Club is expected to score `exp(attack_home − defence_away + home_advantage)` and
+the away Club `exp(attack_away − defence_home)`, and the probability of every Scoreline up to 15–15
+collapses onto the same three Outcomes everything else on the board is scored on. It scores
+**0.19752 RPS**.
+
+```python
+from epl.models import DIXON_COLES
+
+DIXON_COLES.predict(fixtures, evidence)      # (n, 3) over (Home, Draw, Away)
+DIXON_COLES.scorelines(fixtures, evidence)   # (n, 16, 16) over exact Scorelines
+DIXON_COLES.strengths_at(evidence).table()   # one attack and one defence per Club
+```
+
+The likelihood lives in `models/likelihood.py`, apart from the fit, because **the Bayesian
+posterior at #14 has to share it** — ADR 0007 fits this model two ways precisely so the expensive
+tool goes only where it does real work, and one shared likelihood is what stops the two from
+becoming two models. Nothing in that module knows what an optimiser or a Predictor is.
+
+It rates all four tiers, like Elo and for a different reason. Elo is zero-sum, so a rating survives
+a promotion by construction; here nothing in the likelihood knows a division exists, and the tiers
+are joined **only** by the Clubs that changed tier inside the decay horizon. That turns out to be
+enough: mean attack falls monotonically E0 → E3 (+0.45, +0.11, −0.09, −0.31) with nothing ordering
+them, and fitting the Premier League alone costs 0.002 RPS on the Burn-In Window.
+
+One hyperparameter, fitted in the Burn-In Window and frozen: a **time-decay half-life of 322.5
+days**. Anything from 270 to 480 scores within 0.0001 RPS of it, so it is a well-determined region
+rather than a well-determined number; what the data does exclude is the short end, where a 60-day
+half-life costs 0.007 RPS.
+
+Dixon-Coles' famous low-score correction — the τ that lifts 0-0 and 1-1 and lowers 1-0 and 0-1 —
+**has all but vanished from this corpus**. The 1997 paper fitted about −0.13 on four Seasons of one
+division; here it wanders around zero and changes sign, and pinning it at zero costs 0.00011 RPS.
+It is kept because it belongs to the shared likelihood rather than to this fit, and because 0.00011
+in the right direction is a measurement.
+
+```
+python -m epl.models fit          # both fits re-derived on the Burn-In Window, beside the literals
+python -m epl.models strengths    # the attack and defence table at a Season's first round
+python -m epl.models sequential   # ADR 0002's diagnostic — see below
+```
+
+### What the weekly batch gives up
+
+ADR 0002 predicts in weekly Prediction Rounds on purpose, withholding Saturday's results when it
+calls Monday night's game, so that the model, the market and the Pundits all see the same
+information. It also promises to measure what that costs, and `python -m epl.models sequential`
+is where: every Fixture is predicted twice by the same Predictor, once from its round's As-Of
+Instant and once from an Evidence cut at its own kickoff.
+
+| Predictor | Over | Fixtures | Batch RPS | Sequential RPS | Withheld |
+|---|---|---|---|---|---|
+| Elo | whole window | 7,980 | 0.19943 | 0.19942 | **+0.00001** |
+| Elo | 2019/20 on | 2,660 | 0.20525 | 0.20523 | **+0.00002** |
+| Dixon-Coles | whole window | 7,980 | 0.19752 | 0.19749 | **+0.00003** |
+| Dixon-Coles | 2019/20 on | 2,660 | 0.20343 | 0.20338 | **+0.00006** |
+
+**It costs essentially nothing** — two to three orders of magnitude below the 0.0019 that reading
+the goals is worth, and below the resolution anything here is reported at. The comparability
+ADR 0002 bought turns out to have been very nearly free.
+
+Neither number is a score, and only the first is on the scoreboard. The second is what a model that
+broke the comparison would get, and it is bounded rather than exact in two directions that cancel:
+before 2019/20 no kickoff time is recorded, so a Fixture cannot see its own day; after it, a cut at
+kickoff can see a match still being played.
+
 ## Calibration
 
-One shared isotonic step wraps every Predictor identically — Elo, both market lines, the Naive
-Baseline and, later, the Pundits. A Predictor gets it by being registered; there is no calibration
+One shared isotonic step wraps every Predictor identically — Elo, Dixon-Coles, both market lines,
+the Naive Baseline and the Pundits. A Predictor gets it by being registered; there is no calibration
 code in any Predictor and nowhere for a per-Predictor branch to be added (ADR 0006).
 
 It is fitted **walk-forward on out-of-sample Predictions only**. At each Prediction Round the map is
@@ -363,6 +444,7 @@ correction beside them. That rule is why this section can tell you something inc
 |---|---|---|---|---|---|
 | Market Line | 0.19362 | 0.19450 | 0.0061 | 0.0124 | 0.034 |
 | Ceiling Line | 0.19676 | 0.19800 | 0.0060 | 0.0084 | 0.033 |
+| Dixon-Coles | 0.19752 | 0.19793 | 0.0080 | 0.0102 | 0.038 |
 | Elo | 0.19943 | 0.20037 | 0.0055 | 0.0097 | 0.031 |
 | Naive Baseline | 0.22938 | 0.23087 | 0.0061 | 0.0161 | 0.046 |
 
@@ -455,6 +537,11 @@ that name. Read fairly, the same calls beat the floor they were a tenth of a poi
 accuracy barely moves across the two readings (0.5102 → 0.5116, 0.4925 → 0.4993), so the 0.12 really
 is the format of the question rather than a different set of opinions. Neither Calibrated Pundit
 beats Elo; ADR 0003 anticipated that one might, and the naming rule is in the code either way.
+
+The model column here stays Elo now that Dixon-Coles exists, and deliberately. The three-way board
+is a **chosen** comparison of three named opponents rather than a view of the registry, so
+registering a fifth Predictor puts it on the scoreboard and does not silently rewrite the argument
+ADR 0003 is making. `epl.pundits.report.OPPONENTS` says so where the choice is made.
 
 Nothing chooses the buckets. The margins each Pundit actually called *are* the buckets, and the one
 rule is that a bucket too thin to carry a rate merges with its neighbour nearer zero — so Lawrenson

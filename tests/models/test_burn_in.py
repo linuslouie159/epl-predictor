@@ -20,6 +20,8 @@ import pytest
 from epl.metrics import OUTCOMES
 from epl.models import ModelError, OrderedLogit, Settings
 from epl.models import burn_in as fitting
+from epl.models.dixon_coles import DIXON_COLES, FITTED_DIVISIONS, FROZEN_DECAY
+from epl.models.likelihood import Decay
 from epl.windows import BURN_IN_WINDOW, EVALUATION_WINDOW
 
 #: A grid small enough that a unit test can afford the walk it costs. The real one is
@@ -54,6 +56,7 @@ def synthetic_pyramid(
                             OUTCOMES, p=_shares(gap)  # a real signal, plus noise around it
                         )
                     )
+                    home_goals, away_goals = _scoreline(outcome, gap)
                     rows.append(
                         {
                             "season": season,
@@ -62,10 +65,25 @@ def synthetic_pyramid(
                             "time": pd.NA,
                             "home_club": home,
                             "away_club": away,
+                            "home_goals": home_goals,
+                            "away_goals": away_goals,
                             "outcome": outcome,
                         }
                     )
     return pd.DataFrame(rows)
+
+
+def _scoreline(outcome: str, gap: int) -> tuple[int, int]:
+    """A Scoreline that implies the Outcome already drawn, so the goals model has something to fit.
+
+    Derived from the Outcome rather than drawn beside it, because Elo's tests read this same corpus
+    and a Scoreline that disagreed with its own Outcome would quietly change what they are about.
+    """
+    if outcome == "D":
+        return 1, 1
+    if outcome == "H":
+        return (3, 1) if gap > 1 else (2, 1)
+    return (1, 3) if gap < -1 else (1, 2)
 
 
 def _shares(gap: int) -> list[float]:
@@ -234,3 +252,96 @@ class TestWhatItFinds:
         assert isinstance(fitted.logit, OrderedLogit)
         with pytest.raises(AttributeError):
             fitted.settings.k = 99.0  # type: ignore[misc]
+
+
+#: A grid of two, so a unit test can afford the walk. Every candidate here refits Dixon-Coles at
+#: every Burn-In Prediction Round, which is what makes this the expensive half of ``fit``. The real
+#: grid is ``fitting.HALF_LIFE_GRID``, exercised over the corpus by
+#: ``tests/models/test_dixon_coles_over_the_corpus.py``.
+TINY_DECAY = {"half_lives": (120.0, 480.0), "refine": 0}
+
+
+class TestTheDecayFit:
+    def test_it_refuses_the_evaluation_window(self) -> None:
+        with pytest.raises(ModelError, match="Burn-In Window"):
+            fitting.fit_decay(
+                synthetic_pyramid(BURN_IN_WINDOW), seasons=EVALUATION_WINDOW, **TINY_DECAY
+            )
+
+    def test_evaluation_window_matches_never_reach_a_sample(self) -> None:
+        """The structural half, again. A decay reaches back years, so a corpus that was not cut
+        first would weight Evaluation Window matches into a Burn-In fit without anything looking
+        wrong — and the later the Prediction Round, the more of them."""
+        whole_history = pd.concat(
+            [synthetic_pyramid(BURN_IN_WINDOW), synthetic_pyramid(range(2005, 2010))],
+            ignore_index=True,
+        )
+
+        found = fitting.fit_decay(whole_history, **TINY_DECAY)
+
+        assert found.matches_seen == len(synthetic_pyramid(BURN_IN_WINDOW))
+
+    def test_it_chooses_from_the_grid_it_was_given(self) -> None:
+        found = fitting.fit_decay(synthetic_pyramid(BURN_IN_WINDOW), **TINY_DECAY)
+
+        assert found.decay.half_life_days in TINY_DECAY["half_lives"]
+
+    def test_a_winner_against_the_wall_of_its_own_grid_is_refused(self) -> None:
+        """One rule, one message, whichever hyperparameter ran to the edge of its own search."""
+        with pytest.raises(ModelError, match="edge of its own search"):
+            fitting.fit_decay(
+                synthetic_pyramid(BURN_IN_WINDOW), half_lives=(400.0, 800.0, 1200.0), refine=0
+            )
+
+    def test_the_same_corpus_gives_the_same_half_life(self) -> None:
+        corpus = synthetic_pyramid(BURN_IN_WINDOW)
+
+        assert fitting.fit_decay(corpus, **TINY_DECAY) == fitting.fit_decay(corpus, **TINY_DECAY)
+
+    def test_it_walks_prediction_rounds_rather_than_replaying_history_once(self) -> None:
+        """The receipt that has no counterpart in Elo's fit: a half-life can only be judged by
+        predicting with it, so every candidate walks the Burn-In Window's own rounds."""
+        corpus = synthetic_pyramid(BURN_IN_WINDOW)
+
+        found = fitting.fit_decay(corpus, **TINY_DECAY)
+
+        scored = corpus.loc[
+            (corpus["division"] == "E0") & corpus["season"].isin(list(fitting.FITTING_SEASONS))
+        ]
+        assert found.fixtures == len(scored)
+        assert 0 < found.rounds < found.fixtures
+
+    def test_it_fits_on_every_tier_and_scores_only_the_premier_league(self) -> None:
+        found = fitting.fit_decay(synthetic_pyramid(BURN_IN_WINDOW), **TINY_DECAY)
+
+        assert found.divisions == FITTED_DIVISIONS
+        assert found.matches_seen > found.fixtures
+
+    def test_the_tiers_it_fits_on_can_be_narrowed_so_the_choice_can_be_measured(self) -> None:
+        """"Does rating the whole pyramid help a goals model the way it helps Elo?" is a question
+        that has to be answered in the Burn-In Window or not at all (ADR 0008)."""
+        found = fitting.fit_decay(
+            synthetic_pyramid(BURN_IN_WINDOW), divisions=("E0",), **TINY_DECAY
+        )
+
+        assert found.divisions == ("E0",)
+
+    def test_it_reports_both_metrics(self) -> None:
+        found = fitting.fit_decay(synthetic_pyramid(BURN_IN_WINDOW), **TINY_DECAY)
+
+        assert 0.0 < found.rps < 0.5
+        assert 0.0 < found.log_loss < 2.0
+
+    def test_what_it_finds_is_a_frozen_decay(self) -> None:
+        found = fitting.fit_decay(synthetic_pyramid(BURN_IN_WINDOW), **TINY_DECAY)
+
+        assert isinstance(found.decay, Decay)
+        with pytest.raises(AttributeError):
+            found.decay.half_life_days = 99.0  # type: ignore[misc]
+
+    def test_it_leaves_no_half_life_behind_in_the_registered_predictor(self) -> None:
+        """A search that mutated the shipped Predictor would make every later Prediction depend on
+        whether anyone had run a fit in the same process."""
+        fitting.fit_decay(synthetic_pyramid(BURN_IN_WINDOW), **TINY_DECAY)
+
+        assert DIXON_COLES.decay == FROZEN_DECAY

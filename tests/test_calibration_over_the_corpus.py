@@ -12,8 +12,9 @@ rather than reporting the sum as one fact about the corpus:
   nearly continuous, so most knots rest on a single Fixture. Cutting the knots at ten probability
   bands instead recovers most of the loss — see :class:`TestMostOfTheLossIsKnotResolution`, which
   measures the alternative that was not taken so the claim is not left resting on prose.
-* **The corpus.** Even coarse, both stay worse than raw. All four sit at a pooled ten-bin error of
-  about 0.006 before the layer touches them, so there is little real miscalibration left to find.
+* **The corpus.** Even coarse, both stay worse than raw. Four of the five sit at a pooled ten-bin
+  error of about 0.006 before the layer touches them — Dixon-Coles at 0.008 — so there is little
+  real miscalibration left to find.
 
 That is exactly the reading ADR 0006 built the double reporting for, pointed at the layer rather
 than at a model: a large correction that buys nothing is a warning. Publishing only the corrected
@@ -39,7 +40,7 @@ from epl.benchmarks import CEILING_LINE, MARKET_LINE, NAIVE_BASELINE
 from epl.calibration import MINIMUM_SAMPLE, Curve, Isotonic
 from epl.ingest import DIVISIONS, FIRST_SEASON, LAST_SEASON, load_matches, raw_season_path
 from epl.ledger import backtest, scoreboard
-from epl.models import ELO, draw_curve
+from epl.models import DIXON_COLES, ELO, draw_curve
 
 pytestmark = pytest.mark.cache
 
@@ -48,16 +49,18 @@ pytestmark = pytest.mark.cache
 SCORES: dict[str, tuple[float, float]] = {
     "market_line": (0.19362, 0.19450),
     "ceiling_line": (0.19676, 0.19800),
+    "dixon_coles": (0.19752, 0.19793),
     "elo": (0.19943, 0.20037),
     "naive_baseline": (0.22938, 0.23087),
 }
 
-#: The pooled ten-bin calibration error, before and after. It rises for all four — the layer is not
+#: The pooled ten-bin calibration error, before and after. It rises for all five — the layer is not
 #: merely failing to buy RPS, it is leaving each Predictor *less* calibrated than it found it,
 #: which is what rules out "the correction is right and RPS is the wrong judge".
 CALIBRATION_ERROR: dict[str, tuple[float, float]] = {
     "market_line": (0.00614, 0.01241),
     "ceiling_line": (0.00598, 0.00843),
+    "dixon_coles": (0.00804, 0.01018),
     "elo": (0.00549, 0.00972),
     "naive_baseline": (0.00613, 0.01609),
 }
@@ -77,6 +80,7 @@ COARSE_SCORES: dict[str, float] = {
 CORRECTION: dict[str, float] = {
     "market_line": 0.0342,
     "ceiling_line": 0.0328,
+    "dixon_coles": 0.0378,
     "elo": 0.0307,
     "naive_baseline": 0.0455,
 }
@@ -116,7 +120,7 @@ def stored(matches: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(
         [
             backtest.backfill(one, matches)
-            for one in (MARKET_LINE, CEILING_LINE, ELO, NAIVE_BASELINE)
+            for one in (MARKET_LINE, CEILING_LINE, ELO, DIXON_COLES, NAIVE_BASELINE)
         ],
         ignore_index=True,
     )
@@ -164,7 +168,7 @@ class TestTheLayerCostsEveryPredictorSomething:
         assert board.loc[predictor, "calibrated_rps"] == pytest.approx(after, abs=5e-5)
 
     def test_calibration_worsens_every_predictor(self, board: pd.DataFrame) -> None:
-        """The headline. Not one of the four is improved, which is why both columns are published
+        """The headline. Not one of the five is improved, which is why both columns are published
         and why the README's target is still measured against the raw score."""
         assert (board["calibrated_rps"] > board["rps"]).all()
 

@@ -266,3 +266,100 @@ class TestAPredictorThatCoversOnlyPartOfTheWindow:
 
         with pytest.raises(schema.LedgerError, match="1 answers for 3 Fixtures"):
             backtest.backfill(Miscounts(), half_priced, seasons=[2024])
+
+
+class CountsWhatItSaw:
+    """A Predictor whose Prediction *is* how many matches its Evidence held.
+
+    The sequential diagnostic is entirely about how much history each cut let a Predictor see, so
+    the clearest way to test it is a Predictor that reports exactly that and nothing else.
+    """
+
+    name = "counts"
+
+    def predict(
+        self, fixtures: pd.DataFrame, evidence: Evidence
+    ) -> npt.NDArray[np.float64]:
+        seen = len(evidence.matches())
+        return np.tile([seen / 100.0, 0.0, 1.0 - seen / 100.0], (len(fixtures), 1))
+
+
+class TestTheSequentialDiagnostic:
+    @pytest.fixture
+    def one_round(self, make_matches: Callable[..., pd.DataFrame]) -> pd.DataFrame:
+        """A Saturday and a Monday inside one Prediction Round, with kickoff times recorded.
+
+        The Monday Fixture is the whole point: predicted in its batch it cannot see Saturday, and
+        predicted from its own kickoff it can. That difference is what ADR 0002 gives up.
+        """
+        return make_matches(
+            {"date": "2024-08-17", "time": "15:00", "home_club": "arsenal", "outcome": "H"},
+            {"date": "2024-08-17", "time": "15:00", "home_club": "everton", "outcome": "D"},
+            {"date": "2024-08-19", "time": "20:00", "home_club": "fulham", "outcome": "A"},
+        )
+
+    def test_every_fixture_gets_both_readings(self, one_round: pd.DataFrame) -> None:
+        readings = backtest.sequential(CountsWhatItSaw(), one_round, seasons=[2024])
+
+        assert len(readings) == 3
+        assert list(readings.columns) == list(backtest.SEQUENTIAL_COLUMNS)
+
+    def test_the_batch_reading_is_the_whole_round_from_one_instant(
+        self, one_round: pd.DataFrame
+    ) -> None:
+        """All three share a Prediction Round, so all three share a batch Prediction."""
+        readings = backtest.sequential(CountsWhatItSaw(), one_round, seasons=[2024])
+
+        assert readings["as_of_instant"].nunique() == 1
+        assert readings["prob_home"].nunique() == 1
+
+    def test_a_later_kickoff_sees_the_earlier_ones_and_the_batch_does_not(
+        self, one_round: pd.DataFrame
+    ) -> None:
+        """The Monday Fixture: two matches of history sequentially, none in the batch."""
+        readings = backtest.sequential(CountsWhatItSaw(), one_round, seasons=[2024])
+        monday = readings.loc[readings["home_club"] == "fulham"].iloc[0]
+
+        assert monday["prob_home"] == pytest.approx(0.0)
+        assert monday["sequential_prob_home"] == pytest.approx(0.02)
+
+    def test_fixtures_sharing_a_kickoff_cannot_inform_each_other(
+        self, one_round: pd.DataFrame
+    ) -> None:
+        """Two Fixtures at three o'clock see the same history whatever the model does."""
+        readings = backtest.sequential(CountsWhatItSaw(), one_round, seasons=[2024])
+        saturday = readings.loc[readings["home_club"].isin(["arsenal", "everton"])]
+
+        assert saturday["sequential_prob_home"].nunique() == 1
+        assert saturday["sequential_prob_home"].iloc[0] == pytest.approx(0.0)
+
+    def test_it_carries_the_outcome_and_no_ledger_receipt(
+        self, one_round: pd.DataFrame
+    ) -> None:
+        """Shaped so it cannot be mistaken for ledger rows: a stored Prediction may never know an
+        Outcome (ADR 0005), and this deliberately does."""
+        readings = backtest.sequential(CountsWhatItSaw(), one_round, seasons=[2024])
+
+        assert list(readings["outcome"]) == ["H", "D", "A"]
+        assert "inputs_seen" not in readings.columns
+        assert set(readings.columns) != set(schema.LEDGER_COLUMNS)
+
+    def test_a_predictor_that_covers_nothing_gives_an_empty_frame(
+        self, one_round: pd.DataFrame
+    ) -> None:
+        class SaysNothing(CountsWhatItSaw):
+            def covers(self, fixtures: pd.DataFrame) -> npt.NDArray[np.bool_]:
+                return np.zeros(len(fixtures), dtype=bool)
+
+        readings = backtest.sequential(SaysNothing(), one_round, seasons=[2024])
+
+        assert readings.empty
+        assert list(readings.columns) == list(backtest.SEQUENTIAL_COLUMNS)
+
+    def test_both_readings_are_leak_free(self, one_round: pd.DataFrame) -> None:
+        """The sequential cut knows more, and still knows nothing from after its own kickoff."""
+        readings = backtest.sequential(CountsWhatItSaw(), one_round, seasons=[2024])
+        last = readings.loc[readings["home_club"] == "fulham"].iloc[0]
+
+        assert last["sequential_prob_home"] < 0.03
+        assert last["as_of_instant"] < last["kickoff"]

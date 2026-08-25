@@ -38,6 +38,10 @@ CORPUS: tuple[tuple[int, str, str, str, str, str], ...] = (
     (2005, "E0", "2005-08-27", "leeds", "sunderland", "D"),
 )
 
+#: A Scoreline per Outcome, so the goals model has something to fit and no row disagrees with its
+#: own Outcome. The commands are what is being tested here, not what the fits find.
+GOALS: dict[str, tuple[int, int]] = {"H": (2, 1), "D": (1, 1), "A": (1, 2)}
+
 
 @pytest.fixture
 def corpus(project_root: Path, make_matches: Callable[..., pd.DataFrame]) -> pd.DataFrame:
@@ -45,7 +49,8 @@ def corpus(project_root: Path, make_matches: Callable[..., pd.DataFrame]) -> pd.
     matches = make_matches(
         *[
             {"season": season, "division": division, "date": date,
-             "home_club": home, "away_club": away, "outcome": outcome}
+             "home_club": home, "away_club": away, "outcome": outcome,
+             "home_goals": GOALS[outcome][0], "away_goals": GOALS[outcome][1]}
             for season, division, date, home, away, outcome in CORPUS
         ]
     )
@@ -112,7 +117,7 @@ class TestTheFitReport:
     ) -> None:
         """ADR 0008 freezes the hyperparameters as literals, so the two can drift apart in
         silence. Printing both is what lets a reader see which way."""
-        assert cli.main(["fit"]) == 0
+        cli.main(["fit"])
 
         printed = capsys.readouterr().out
         assert "found:" in printed
@@ -129,6 +134,83 @@ class TestTheFitReport:
         assert "2001/02-2004/05" in printed
         assert "warmed from 2000/01" in printed
         assert set(BURN_IN_WINDOW) == set(range(2000, 2005))
+
+    def test_a_fit_that_cannot_be_taken_is_reported_and_sets_the_exit_code(
+        self, corpus: pd.DataFrame, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Eleven matches are not enough to choose a half-life, and the shortest candidate wins by
+        default — which is the grid's own wall, and the wall check is what says so.
+
+        Reported rather than raised, so the other model's numbers still reach the reader; non-zero,
+        so a script cannot mistake it for a clean run.
+        """
+        assert cli.main(["fit"]) == 1
+
+        printed = capsys.readouterr().out
+        assert "elo\n  found:" in printed
+        assert "could not be taken on this corpus" in printed
+        assert "edge of its own search" in printed
+
+
+class TestTheStrengthsReport:
+    def test_it_names_the_clubs_promoted_into_the_season(
+        self, corpus: pd.DataFrame, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """ADR 0004's question asked of the goals model, where the answer is two numbers per Club
+        rather than one."""
+        assert cli.main(["strengths", "--season", "2005"]) == 0
+
+        printed = capsys.readouterr().out
+        assert "promoted into the Premier League (2)" in printed
+        assert "leeds" in printed and "sunderland" in printed
+        assert "attack" in printed and "defence" in printed
+
+    def test_it_says_what_reached_the_fit(
+        self, corpus: pd.DataFrame, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The receipt: how many Clubs, from how many matches, weighted back how far. A strength
+        with nothing behind it reads exactly like one with a Season behind it otherwise."""
+        cli.main(["strengths", "--season", "2005"])
+
+        printed = capsys.readouterr().out
+        assert "matches, weighted back" in printed
+        assert "home advantage" in printed
+        assert "low-score correction" in printed
+
+    def test_a_season_the_corpus_does_not_hold_is_refused(self, corpus: pd.DataFrame) -> None:
+        with pytest.raises(SystemExit, match=r"2019/20"):
+            cli.main(["strengths", "--season", "2019"])
+
+
+class TestTheSequentialReport:
+    def test_it_reads_both_ways_and_says_it_is_not_a_score(
+        self, corpus: pd.DataFrame, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """ADR 0002 allows this measurement and forbids quoting it, so the label travels with it."""
+        assert cli.main(["sequential", "--seasons", "2005", "2005"]) == 0
+
+        printed = capsys.readouterr().out
+        assert "diagnostic, never a score" in printed
+        assert "batch_rps" in printed and "sequential_rps" in printed
+        assert "withheld" in printed
+
+    def test_it_publishes_the_readings_beside_the_scoreboard(
+        self, corpus: pd.DataFrame, project_root: Path
+    ) -> None:
+        cli.main(["sequential", "--seasons", "2005", "2005"])
+
+        published = pd.read_csv(project_root / "outputs" / cli.SEQUENTIAL_REPORT)
+        assert len(published) == 3
+        assert "sequential_prob_home" in published.columns
+
+    def test_it_can_be_pointed_at_any_registered_predictor(
+        self, corpus: pd.DataFrame, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The question is about the As-Of rule rather than about one model, so nothing here is
+        Dixon-Coles-shaped."""
+        assert cli.main(["sequential", "--predictor", "elo", "--seasons", "2005", "2005"]) == 0
+
+        assert "elo:" in capsys.readouterr().out
 
 
 class TestItReadsTheProcessedTable:
