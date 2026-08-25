@@ -96,6 +96,16 @@ Do not "fix" these without reading the linked ADR first:
   — `numpy.linalg`, `scipy.linalg`, L-BFGS-B and PyMC all die with `0xc06d007f`. It looks like an
   arbitrary preference and is the second place after `arviz <1` where a free version choice breaks
   the build rather than drifting. See docs/DECISIONS.md, "Added at stage 9".
+- **The Bayesian fit refuses part of the parameter space, and the guard is load-bearing.**
+  `epl.simulate.posterior.log_likelihood_at` returns `-inf` wherever Dixon-Coles' correction would
+  turn a Scoreline probability negative. That is the model's real support, not a workaround: the
+  shared likelihood's `CORRECTION_FLOOR` keeps the log-density smooth there while the gradient goes
+  from 229 to 9.3e12, and a sampler handed that flies to infinity and returns a `nan` no divergence
+  check catches. Deleting it makes the fit 55x slower *and* wrong, while looking merely slow.
+- **The posterior's priors are deliberately far too wide to be sensible**, because a prior that
+  shrinks makes it a different model from the MLE and ADR 0007 forbids exactly that. See
+  `epl.simulate.posterior.Priors`; tightening them to something reasonable-looking moves a single
+  Fixture's Home probability by 0.079.
 - **Refreshing a cached raw file archives the old bytes** into `superseded/` instead of replacing
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
   Both are explained where they live — `src/epl/ingest/cache.py`, which both the Football-Data
@@ -181,8 +191,45 @@ margin_map_lawrenson       1468 0.2141 0.6043    1.1645    0.5110 0.0207      0.
               sutton       1130 0.2473 0.7230    5.3558    0.5033 0.0988      0.3841
 ```
 
-`epl.simulate` is still a documented shell, naming the issue that builds it — and now naming the
-likelihood that issue must reuse rather than rewrite.
+**Stage 10 is built**: the Bayesian Dixon-Coles posterior (`src/epl/simulate/posterior.py`,
+`checkpoints.py`, issue #14) — the same likelihood sampled instead of maximised, handed to PyMC as
+one opaque node so no second likelihood exists (ADR 0007), fitted only at Season Projection points.
+The two fits agree on a real Fixture to **0.0090**, which is what licenses the split at all. One
+posterior fit takes about **four minutes** against the MLE's 0.22 seconds.
+`python -m epl.simulate checkpoints` and `python -m epl.simulate posterior`.
+
+Six things about stage 10 worth knowing before building on it:
+
+- **The priors are scaffolding and must stay too wide to do anything.** A perfectly reasonable
+  strength prior of 0.5 pulls fitted attack to **0.65 times** the MLE's — Darlington from −0.645 to
+  −0.127 — and moves one Fixture's Home probability by 0.079. That is textbook shrinkage and it
+  is *wrong here*: `epl.models.dixon_coles` "regresses no Club to the mean and carries no prior", so
+  a shrinking posterior is a different model, which is the one thing ADR 0007 exists to prevent.
+  `strength_sigma = 2.0` puts every strength this project has ever fitted inside half a standard
+  deviation. Do not "tighten these sensible defaults".
+- **Attack and defence are built the same way on purpose, and the obvious version is wrong.** Both
+  are zero-sum deviations from a `scoring_level` that carries the pyramid's goal rate. A plain
+  Normal on each defence — the obvious way — constrains not just the spread of defence but its
+  *mean*, which is that goal rate, and the MLE has no opinion about it. That asymmetry alone left
+  defence at 0.86× the MLE while attack had recovered to 1.005.
+- **`log_likelihood_at` refuses part of the parameter space, and deleting that guard breaks the fit
+  in a way that looks like slowness.** Dixon-Coles' correction turns Scoreline probabilities
+  negative beyond `rho ≈ 0.35`, where `CORRECTION_FLOOR` keeps the log-density smooth while putting
+  `1/1e-12` into the gradient — 229 at `rho = 0.30`, **9.3e12** at 0.35. NUTS takes one step against
+  that, overflows, and gets a `nan`, which never trips a divergence check because comparisons
+  against `nan` are false. Measured: 1,023 leapfrog steps per draw against 7, and a posterior mean
+  0.85 log-goals from the MLE. The clamp is right for L-BFGS-B and a trap for a sampler.
+- **About 3.3% of draws are divergent, and that is a dozen fourth-tier Clubs rather than a defect.**
+  The correlation between a Club's log weight and its posterior width is **−0.977**; Grimsby carries
+  half a weighted match, a posterior sd of 1.18, and draws reaching an attack of 5.85. Narrowing the
+  prior would remove them and bring the shrinkage back. `target_accept` is 0.95 because 0.99 could
+  not finish a corpus-scale fit in twenty minutes.
+- **Defence comes back at 0.875× the MLE and that is not shrinkage** — the Clubs carrying it are
+  pushed *further* from zero than the MLE puts them, which is what a posterior mean does to a
+  weakly-identified skewed log-rate. Same handful of Clubs as the divergences.
+- **The posterior mean is not what a Season Projection runs on.** `Posterior.mean()` exists to be
+  compared against the MLE; collapsing the draws to it throws away exactly the parameter uncertainty
+  the expensive fit was run to capture, which is the 48%-versus-34% title probability in ADR 0007.
 
 Seven things about stage 9 worth knowing before building on it:
 
@@ -373,10 +420,13 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Issue #14 — the Bayesian Dixon-Coles posterior**, which stage 9 unblocked and which is the only
-thing standing between here and a Season Projection (#15). It belongs in `epl.simulate`, and the
-one rule that matters is ADR 0007's: it fits the *same* `epl.models.likelihood.Sample` and returns
-draws of the *same* `Strengths`. A second likelihood is the failure mode that ADR exists to prevent.
+**Issue #15 — the Monte Carlo Season Projection**, which stage 10 unblocked and which is the last
+modelling stage. It reads `epl.simulate.posterior.Posterior` — draws of `Strengths`, one per
+simulated Season, never `mean()` — and `epl.simulate.checkpoints.projection_rounds` says where a
+projection may be taken from. The Scoreline grid it needs is already written
+(`epl.models.likelihood.scorelines`); what is new is the tiebreaker chain, the 10,000-Season walk
+and the recorded seed. Note that the seed has two halves now: the sampler's, on every
+`Diagnostics`, and the simulation's.
 
 Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
 unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage
@@ -414,6 +464,8 @@ python -m epl.models draws     # the draw rate against Supremacy, predicted and 
 python -m epl.models ratings   # the Elo pool at a Season's first Prediction Round
 python -m epl.models strengths # Dixon-Coles' attack and defence at the same instant
 python -m epl.models sequential      # ADR 0002's diagnostic: per Fixture against per round
+python -m epl.simulate checkpoints   # where a Season is projected from, and where it is not
+python -m epl.simulate posterior     # fit one posterior, and read it beside the MLE
 pytest                         # add --run-network to also hit football-data.co.uk
 ```
 

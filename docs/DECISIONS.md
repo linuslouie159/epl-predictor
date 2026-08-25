@@ -776,6 +776,146 @@ same for every Predictor, and the walk takes one fit per distinct kickoff instea
 thirty-four, and half an hour inside a test suite is a test nobody runs. The Dixon-Coles row above
 came from `python -m epl.models sequential`.
 
+## The Bayesian Dixon-Coles posterior
+
+Added at stage 10 (issue #14), the second of ADR 0007's two fits. `epl.simulate.posterior` samples
+the same likelihood `epl.models.dixon_coles` maximises; `epl.simulate.checkpoints` decides the
+handful of Prediction Rounds it is allowed to run at. The Monte Carlo Season Projection over these
+draws is issue #15.
+
+- **The sampler is handed the numpy likelihood itself, not a PyTensor copy of it.** The obvious way
+  to write this module is to re-express the rates, the Poissons and the low-score correction in
+  PyTensor so NUTS can differentiate them — and that produces exactly the second implementation
+  ADR 0007 exists to prevent, undetectably: two Dixon-Coles likelihoods disagreeing in the fourth
+  decimal both look entirely reasonable, and only the Season Projection would quietly be a different
+  model from the match probabilities. Instead `negative_log_likelihood` is wrapped as a single
+  opaque `Op`. It already returns its own analytic gradient, which is exactly the pair a PyTensor
+  `Op` needs, so the sampler differentiates the arithmetic the optimiser descends rather than a
+  faithful copy of it.
+- **The gauge has to be inside the model here, where the MLE can apply it afterwards.** The
+  likelihood is flat along "add a constant to every attack *and* every defence". An optimiser walks
+  to an arbitrary point on that ridge and `centred()` picks the readable one on the way out; a
+  sampler handed the same ridge has an improper posterior and wanders it forever. `ZeroSumNormal`
+  on attack is that gauge expressed where a sampler can see it, and it is not a stylistic choice: a
+  plain Normal there does not give a wrong number, it gives a fit that never finishes converging.
+
+### The cliff under the low-score correction
+
+The single hardest thing found at this stage, and it is a property of the *shared* likelihood that
+only the Bayesian path can trip over.
+
+Dixon-Coles' correction multiplies four Scorelines by factors that go **negative** once `rho` is
+large enough — beyond about 0.35 on a typical sample. There the model is not a probability
+distribution at all, and `epl.models.likelihood.CORRECTION_FLOOR` clamps the factor at 1e-12 before
+its logarithm so the optimiser's line search cannot fall off the edge. That clamp is right for
+L-BFGS-B, which only accepts an improving step and so never lingers there. It is a trap for a
+sampler, because it keeps the log-density *smooth* while putting `1 / 1e-12` into the gradient:
+
+| `rho` | smallest correction factor | log-density | largest gradient component |
+|---|---|---|---|
+| 0.30 | 0.071 | −1145 | 2.3e2 |
+| 0.35 | **−0.083** | −1226 | **9.3e12** |
+| 0.50 | −0.548 | −1316 | 1.4e13 |
+
+The log-density moves by less than a hundred while the gradient gains ten orders of magnitude. NUTS
+takes one leapfrog step against 1e12, throws the position to infinity, overflows `exp`, and produces
+a `nan` — which is worse than an error, because divergence is tested with a comparison and every
+comparison against `nan` is false. The trajectory is never rejected: it doubles to the tree-depth
+ceiling on **every** draw. Measured on an 18-parameter fixture that is 1,023 leapfrog steps per draw
+against 7, a 55× slowdown, and a posterior mean 0.85 log-goals from the MLE — a fit that looks
+merely slow and is actually wrong.
+
+`epl.simulate.posterior.log_likelihood_at` therefore refuses that region outright, returning `-inf`
+with a zero gradient. That is not a patch on the shared likelihood; it is the model's actual support
+written down, since a Scoreline probability cannot be negative and those parameter values have zero
+likelihood. The check is built from `low_score_factor` — the same function the likelihood corrects
+with — so it asks the model where it is valid rather than restating any part of it. `rho = 0.35` is
+only three and a half prior standard deviations out, so this is reached during ordinary tuning
+rather than in some pathological corner.
+
+### The priors are scaffolding, and had to be measured to prove it
+
+`epl.models.dixon_coles` says of the MLE path that "nothing here regresses a Club to the mean, and
+nothing carries a prior — the time decay is the only thing that forgets". A Bayesian fit with
+informative priors shrinks every Club toward the mean. That is ordinary practice and it is **wrong
+here**, because it makes the posterior a different model from the MLE, which is the one thing
+ADR 0007's shared likelihood exists to prevent. The priors exist only to make the posterior proper.
+
+Measured at the first Prediction Round of 2015/16 — 11,873 weighted matches, 102 Clubs, 206
+parameters — as the regression slope of posterior mean on MLE, where one is no shrinkage:
+
+| strength prior | attack slope | defence slope | Fixture quote off by |
+|---|---|---|---|
+| 0.5 | 0.649 | 0.557 | 0.0791 |
+| 1.0 | 0.856 | 0.769 | 0.0332 |
+| 2.0 | 1.005 | 0.861 | 0.0082 |
+| 5.0 | 1.155 | 0.896 | 0.0052 |
+
+At 0.5 — a perfectly reasonable-looking default — Darlington's attack goes from −0.645 to −0.127 and
+Manchester City's from +0.960 to +0.748. So `strength_sigma` is set from what the corpus has ever
+produced rather than from what seems reasonable: fitted attack has a spread of about 0.32 and a range
+inside ±1, so **2.0** puts every strength this project has fitted within half a standard deviation
+and the likelihood's own `STRENGTH_BOUND` at two and a half.
+
+**Widening was only half of it.** Attack recovered to 1.005 while defence stalled at 0.861, and the
+asymmetry was structural rather than a matter of width: attack was a `ZeroSumNormal` and defence a
+plain Normal centred at zero, which constrains not only the *spread* of defence but its *mean* — and
+that mean is the pyramid's overall goal rate, which the likelihood determines from every Scoreline
+in the sample and the MLE has no opinion about. `model_for` now builds both as zero-sum deviations
+from a `scoring_level` that carries the rate itself, under a wide prior. Home advantage comes back
+at **+0.2118** against the MLE's **+0.2117**.
+
+**Every number in this section comes from an Evaluation-Window Season, and none of it is tuning.**
+ADR 0008 confines hyperparameter fitting to the Burn-In Window, and the measurements below were all
+taken at the first Prediction Round of 2015/16. The distinction that makes that legitimate is what
+they compare: this fit against *the MLE of the same model on the same matches*, chains against each
+other, and the clock. **None of them looks at an Outcome**, and nothing here was chosen because it
+scored better. Same argument as `epl.pundits.margin.MINIMUM_SAMPLE`, stated for the same reason —
+an Evaluation-Window season number sitting in a constant's docstring should make a reader stop.
+
+### Measured at stage 10 (25 Aug 2026)
+
+At the first Prediction Round of 2015/16, four chains of 1,000 draws after 1,000 tuning steps:
+
+- **One posterior fit takes about four minutes** — 231 s over 206 parameters and 11,873 weighted
+  matches, against the MLE's 0.22 s at the same round. That is roughly a thousand times the cheap
+  fit, which is precisely why ADR 0007 confines it to Season Projection points: six checkpoints
+  across 21 historical Seasons is 126 fits and about eight hours, where every round would be some
+  20,000 fits and the overnight-to-two-day job the ADR refuses by name.
+- **The two fits agree on a real Fixture to 0.0090**, which is issue #14's stated acceptance
+  criterion. Bournemouth v Aston Villa comes out H 0.5340 / D 0.2381 / A 0.2279 by maximum
+  likelihood and H 0.5430 / D 0.2381 / A 0.2190 at the posterior mean. This is the measurement that
+  licenses the whole split: every match probability the project publishes is the cheap fit.
+- **The chains converge** — R-hat 1.0000 and 2,303 effectively independent draws of the least-mixed
+  parameter, from 4,000 total.
+- **Defence still comes back at 0.875 times the MLE's, and that is not shrinkage.** It is stable
+  across chain counts, and the Clubs carrying it are the ones the two fits disagree about most:
+  Grimsby, Stockport, Darlington and Lincoln, on 38 to 84 weighted matches each, all pushed *further*
+  from zero by the posterior rather than toward it. That is what a posterior mean does to a
+  weakly-identified log-rate whose marginal is skewed, and it is the opposite sign to shrinkage.
+  Every Club affected is in the fourth tier, four promotions from anything scored.
+- **The draws genuinely disagree, which is the entire point.** Across the posterior, that one
+  Fixture's Home probability spans 0.42 to 0.77 with a standard deviation of 0.073, and home
+  advantage has a standard deviation of 0.025. An MLE reports none of that, and it is what compounds
+  across 380 simulated Fixtures into the difference between a 34% title probability and a 48% one.
+- **Running the chains in parallel is nearly free and buys nearly nothing.** `cores` does not change
+  the draws — PyMC derives one seed per chain from the seed and the chain count alone, and four
+  chains on four cores come back bit-identical to the same four on one — but it saves 6% rather than
+  the fourfold a chain count suggests: 58 s against 62 s. The likelihood is a Python function called
+  through numba's object mode, so the chains queue for the GIL. That is the standing cost of not
+  writing a second likelihood in PyTensor, and it is what issue #15 should plan its validation run
+  around rather than assuming chains scale.
+- **About 3.3% of draws are divergent, and they are all the same dozen Clubs.** The correlation
+  between a Club's log weight in the sample and the width of its posterior is **−0.977**. At the
+  first round of 2015/16 Grimsby carries **half a weighted match** — against 52.9 for a
+  fully-observed Club — a posterior standard deviation of 1.18, and draws reaching an attack of
+  **5.85**, which is a rate of 330 goals a match. Those draws walk into the region the support
+  check refuses, and each refusal is counted as a divergence. This is the wide prior working rather
+  than failing: a Club with no football has a posterior that *is* the prior, which is the honest
+  answer, and narrowing the prior to stop it would reintroduce the shrinkage on the Clubs that do
+  have football. Every Club involved is in the fourth tier. `target_accept` is 0.95 because 0.99
+  did not finish a corpus-scale fit in twenty minutes and 0.9 diverges more.
+
 ## Open risks
 
 1. **BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.

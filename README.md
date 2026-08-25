@@ -132,6 +132,8 @@ outputs/pundit_calls.csv  every call ranked by miss; regenerable, gitignored
 outputs/margin_map.csv  what a call of each margin is worth; regenerable, gitignored
 outputs/sequential.csv  every Fixture predicted per round and per kickoff; regenerable, gitignored
 src/epl/simulate/       Bayesian fit + Monte Carlo Season Projection
+src/epl/simulate/posterior.py     the same likelihood sampled instead of maximised (ADR 0007)
+src/epl/simulate/checkpoints.py   the handful of rounds a posterior is allowed to run at
 src/epl/ledger/         Prediction stores, the row audit, the scoreboard
 outputs/backtest/       regenerable, gitignored — one file per Predictor
 outputs/live/           SEALED, committed, append-only — one file per Prediction Round
@@ -420,6 +422,34 @@ Neither number is a score, and only the first is on the scoreboard. The second i
 broke the comparison would get, and it is bounded rather than exact in two directions that cancel:
 before 2019/20 no kickoff time is recorded, so a Fixture cannot see its own day; after it, a cut at
 kickoff can see a match still being played.
+
+## The Season Projection's fit
+
+The same Dixon-Coles, sampled rather than maximised, and run at a handful of Prediction Rounds
+rather than all 952 (ADR 0007). One posterior fit takes about **four minutes** against the MLE's
+0.22 seconds, which is exactly why it is confined to Season Projection points: weekly during a live
+Season, and roughly six checkpoints per historical Season for validation.
+
+```
+python -m epl.simulate checkpoints   # where a Season is projected from, and where it is not
+python -m epl.simulate posterior     # fit one, and read it beside the MLE of the same model
+```
+
+**Match probabilities and Season Projections come from formally different fits of the same model**,
+and every output that puts them side by side says so. Everything on the scoreboard is the maximum-
+likelihood path; only a projection is drawn from the posterior.
+
+The two agree, which is what licenses the split at all: at the first Prediction Round of 2015/16,
+Bournemouth v Aston Villa comes out H 0.5340 / D 0.2381 / A 0.2279 by maximum likelihood and
+H 0.5430 / D 0.2381 / A 0.2190 at the posterior mean — **0.0090 apart**. What the expensive fit adds
+is not a better point estimate but the spread around it: across the draws that same Fixture's Home
+probability spans 0.42 to 0.77. Ignoring that spread is what makes a naive season simulator report a
+48% title probability where the honest answer is 34%.
+
+There is no second likelihood. The sampler is handed
+`epl.models.likelihood.negative_log_likelihood` itself as one opaque node — it already returns its
+own analytic gradient — so the arithmetic being sampled is the arithmetic being optimised rather
+than a copy of it that could drift.
 
 ## Calibration
 

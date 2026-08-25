@@ -304,6 +304,19 @@ class Strengths:
         away_rate = np.exp(self.attack[away] - self.defence[home])
         return home_rate, away_rate
 
+    def outcomes_for(
+        self, home: npt.NDArray[np.intp], away: npt.NDArray[np.intp]
+    ) -> npt.NDArray[np.float64]:
+        """(Home, Draw, Away) per Fixture, from these strengths — rates, Scorelines, collapsed.
+
+        The three steps in one place because they are always taken together and always in this
+        order, and because a caller that assembles them by hand is a caller that can assemble them
+        differently. :meth:`rates` and :func:`scorelines` remain public for the paths that want the
+        goals rather than the Outcome — the Season Projection needs a Scoreline grid, not this.
+        """
+        home_rate, away_rate = self.rates(home, away)
+        return outcomes(scorelines(home_rate, away_rate, self.correction))
+
     def table(self) -> pd.DataFrame:
         """One row per Club, strongest attack first. The model's own view of the pyramid."""
         frame = pd.DataFrame(
