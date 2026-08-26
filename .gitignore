@@ -62,3 +62,10 @@ outputs/margin_map.csv
 # Round and again from its own kickoff. ADR 0002's diagnostic, derived and regenerable like the
 # rest — and never a Prediction this project made, which is the other reason it is not evidence.
 outputs/sequential.csv
+
+# What `python -m epl.simulate` publishes: one Season Projection, and every projection taken over
+# the completed Seasons beside the table each one actually produced. Regenerable from the corpus
+# and the two recorded seeds — which is exactly what makes them reproducible rather than evidence.
+# A Season Projection is also not a Prediction: nothing in either store knows what one is.
+outputs/projection.csv
+outputs/projection_validation.csv

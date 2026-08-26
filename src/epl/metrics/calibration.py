@@ -30,15 +30,87 @@ BINS = 10
 #: float-step below an edge still counts as being on it.
 EDGE_PRECISION = 9
 
+#: What every reliability diagram in this project is counted in, unless its caller says otherwise.
+#: A diagram over Predictions counts Predictions; :mod:`epl.simulate.validation` builds one over
+#: Season Projections and counts those, because a Club-projection is not a Prediction (CONTEXT.md)
+#: and a column claiming otherwise would put one domain term on another's numbers.
+COUNTED_AS = "predictions"
+
 #: Canonical column order for a reliability diagram.
 RELIABILITY_COLUMNS: tuple[str, ...] = (
     "lower",
     "upper",
-    "predictions",
+    COUNTED_AS,
     "mean_predicted",
     "observed",
     "gap",
 )
+
+
+def diagram(
+    promised: object, happened: object, *, counted_as: str = COUNTED_AS
+) -> pd.DataFrame:
+    """The binning every reliability diagram in this project shares, over two flat arrays.
+
+    ``promised`` is what was quoted and ``happened`` is one or zero for each — already flattened,
+    already paired. Separate from :func:`reliability` because the *front* of a diagram differs by
+    what is being measured and the middle does not: a Prediction is three ordinal Outcomes that
+    have to be one-hotted first, and a Season Projection's title, European place and relegation are
+    three binary events that are already in this shape. What must not differ is the ten bins, the
+    right-open edges and the rounding, because a diagram is only worth reading against another one
+    built the same way.
+
+    ``counted_as`` names the count column — see :data:`COUNTED_AS`.
+
+    One row per bin, always :data:`BINS` of them. An unoccupied bin keeps its row with a count of
+    zero and no ``observed`` or ``gap``: reporting a zero gap where nothing was promised would read
+    as perfect calibration in a band nobody ever used.
+    """
+    quoted = np.asarray(promised, dtype=np.float64).reshape(-1)
+    outcome = np.asarray(happened, dtype=np.float64).reshape(-1)
+    if quoted.shape != outcome.shape:
+        raise MetricsError(
+            f"{len(quoted)} promised against {len(outcome)} outcomes; a diagram pairs them"
+        )
+
+    edges = np.linspace(0.0, 1.0, BINS + 1)
+    # Bins are right-open, so a probability lands in the bin it opens and 1.0 folds back into the
+    # top one. The rounding is not cosmetic: 0.3 is stored as slightly less than 0.3, so without
+    # it a Prediction of exactly 0.3 would fall into [0.2, 0.3) instead of the bin it opens.
+    index = np.clip(np.floor(np.round(quoted * BINS, EDGE_PRECISION)), 0, BINS - 1).astype(int)
+
+    counts = np.bincount(index, minlength=BINS)
+    occupied = counts > 0
+    with np.errstate(invalid="ignore"):
+        mean_predicted = np.where(
+            occupied, np.bincount(index, weights=quoted, minlength=BINS) / counts, np.nan
+        )
+        frequency = np.where(
+            occupied, np.bincount(index, weights=outcome, minlength=BINS) / counts, np.nan
+        )
+
+    return pd.DataFrame(
+        {
+            "lower": edges[:-1],
+            "upper": edges[1:],
+            counted_as: counts,
+            "mean_predicted": mean_predicted,
+            "observed": frequency,
+            "gap": frequency - mean_predicted,
+        }
+    )
+
+
+def error_of(table: pd.DataFrame, *, counted_as: str = COUNTED_AS) -> float:
+    """A reliability diagram reduced to one number: the count-weighted mean absolute gap.
+
+    Empty bins are ignored rather than counted as perfectly calibrated.
+    """
+    weights = table[counted_as].to_numpy(dtype=np.float64)
+    if weights.sum() == 0:
+        raise MetricsError("no Fixtures to score")
+    gaps = np.abs(table["gap"].to_numpy(dtype=np.float64))
+    return float(np.nansum(gaps * weights) / weights.sum())
 
 
 def reliability(predictions: object, outcomes: str | Sequence[str] | object) -> pd.DataFrame:
@@ -49,37 +121,15 @@ def reliability(predictions: object, outcomes: str | Sequence[str] | object) -> 
     would read as perfect calibration in a band the Predictor never used.
 
     ``gap`` is observed minus promised, so a negative gap is overconfidence.
+
+    The three Outcomes are pooled: a Prediction contributes three points, one per Outcome, and the
+    one-hot is what turns "Home happened" into a one against the Home column and zeros against the
+    other two. :func:`diagram` is the binning underneath, shared with the Season Projection's.
     """
     probabilities, observed = _aligned(predictions, outcomes)
-    promised = probabilities.reshape(-1)
-    happened = _one_hot(observed).reshape(-1)
-
-    edges = np.linspace(0.0, 1.0, BINS + 1)
-    # Bins are right-open, so a probability lands in the bin it opens and 1.0 folds back into the
-    # top one. The rounding is not cosmetic: 0.3 is stored as slightly less than 0.3, so without
-    # it a Prediction of exactly 0.3 would fall into [0.2, 0.3) instead of the bin it opens.
-    index = np.clip(np.floor(np.round(promised * BINS, EDGE_PRECISION)), 0, BINS - 1).astype(int)
-
-    counts = np.bincount(index, minlength=BINS)
-    occupied = counts > 0
-    with np.errstate(invalid="ignore"):
-        mean_predicted = np.where(
-            occupied, np.bincount(index, weights=promised, minlength=BINS) / counts, np.nan
-        )
-        frequency = np.where(
-            occupied, np.bincount(index, weights=happened, minlength=BINS) / counts, np.nan
-        )
-
-    return pd.DataFrame(
-        {
-            "lower": edges[:-1],
-            "upper": edges[1:],
-            "predictions": counts,
-            "mean_predicted": mean_predicted,
-            "observed": frequency,
-            "gap": frequency - mean_predicted,
-        }
-    )[list(RELIABILITY_COLUMNS)]
+    return diagram(probabilities.reshape(-1), _one_hot(observed).reshape(-1))[
+        list(RELIABILITY_COLUMNS)
+    ]
 
 
 def expected_calibration_error(
@@ -96,9 +146,4 @@ def expected_calibration_error(
     >>> abs(error - 0.4 / 12) < 1e-12
     True
     """
-    table = reliability(predictions, outcomes)
-    weights = table["predictions"].to_numpy(dtype=np.float64)
-    if weights.sum() == 0:
-        raise MetricsError("no Fixtures to score")
-    gaps = np.abs(table["gap"].to_numpy(dtype=np.float64))
-    return float(np.nansum(gaps * weights) / weights.sum())
+    return error_of(reliability(predictions, outcomes))

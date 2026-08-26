@@ -916,6 +916,151 @@ At the first Prediction Round of 2015/16, four chains of 1,000 draws after 1,000
   have football. Every Club involved is in the fourth tier. `target_accept` is 0.95 because 0.99
   did not finish a corpus-scale fit in twenty minutes and 0.9 diverges more.
 
+## The Monte Carlo Season Projection
+
+Added at stage 11 (issue #15), the last modelling stage. `epl.simulate.table` turns Fixtures and
+goals into a final league table; `epl.simulate.projection` walks 10,000 Seasons over the posterior's
+draws; `epl.simulate.validation` runs the whole thing across completed Seasons and asks whether the
+answers were calibrated or merely plausible.
+
+- **The tiebreaker chain is issue #15's, not the Premier League's, and the difference is a
+  refinement.** The competition's own regulation runs points, goal difference, goals scored, and
+  then — with **no head-to-head step at all** — declares the Clubs to occupy the same position,
+  holding a play-off at a neutral ground only if the championship, relegation or a European place
+  turns on it. The ticket asks for head-to-head points and head-to-head away goals between goals
+  scored and that play-off, so `TIEBREAKERS` has six steps where the regulation has four. It changes
+  nothing the regulation decides and replaces some coin flips with a rule, which is why it was
+  built as asked rather than argued about. See the measurement below for how often it matters.
+- **The chain lives in a module that has never heard of a posterior.** `epl.simulate.table` takes
+  Fixtures and goals and returns positions, so every step of it is exercised by hand-built leagues
+  of three and four Clubs in `tests/simulate/test_league_table.py`. A chain that could only be reached
+  through a ten-thousand-Season Monte Carlo run is a chain nobody checks, and the tests that matter
+  most are the ones where two steps disagree — a league where goal difference says one thing and
+  the head-to-head record says the opposite is the only kind that tells a correct chain from a
+  plausible one.
+- **A `Slate` holds the results of the played Fixtures and cannot express any others.** This is the
+  project's one rule made structural rather than checked. Validating a historical Season means
+  handing the projection a corpus that already contains every result it is supposed to be
+  forecasting, so `Slate.of(played, remaining)` reads goals off the first frame and only the two
+  Club columns off the second. There is no argument through which a projection can give itself the
+  answer.
+- **Both seeds are recorded, because a projection is random twice.** The sampler's is on every
+  `Diagnostics` and the walk's is on `Simulation`, and `Projection.describe()` prints both. They are
+  deliberately different numbers so that no reader can mistake one for the other being reused.
+- **What is printed and what is written are two different tables, and only one of them can be
+  re-run.** `Projection.table()` is the twenty rows a person reads; `Projection.published()` puts
+  the Season, the As-Of Instant and the Prediction Round in front of them and the two seeds, the
+  simulated-Season count and the posterior draw count behind. The file gets the second, because
+  "a fixed deterministic seed recorded in the output" means the output rather than the terminal,
+  and a projection that cannot say which Season it is of is twenty numbers. `published()` refuses
+  an unattributed projection rather than writing one.
+- **Draws are spread, not sampled with replacement, and never walked in order.** `fit` concatenates
+  its chains, so the first quarter of a posterior's draws are one chain's; a walk over the first
+  10,000 would explore a quarter of what it paid nine minutes for. `draw_order` therefore lays down
+  whole copies of every draw and hands out the remainder at random. Truncating a permutation of
+  enough whole copies — the obvious version — leaves some draws used three times and others once.
+- **Goals are drawn from the Scoreline grid, not from two independent Poissons.** The low-score
+  correction lives in exactly four cells of that grid, so a walk that sampled the two rates
+  independently would be simulating Dixon-Coles with the Dixon-Coles taken out.
+- **The European band is a stated simplification and says so.** Relegation is the bottom three and
+  the title is first place; both are facts about the league. "European places" is the top four,
+  which is the Champions League for most of the Evaluation Window but not all of it — England has
+  had a fifth place in some recent Seasons on UEFA's coefficient, and a European place can also be
+  won by lifting a cup, which is not a league position and which nothing here models.
+- **The real final table is the one the results give.** The corpus has no column for an
+  administrative points deduction — Portsmouth's nine in 2009/10, Everton's and Nottingham Forest's
+  in 2023/24 — so both sides of the validation are the table the football alone produced. That is
+  self-consistent, since the projection is not being marked against a table it was never asked to
+  predict, but it does mean the relegation column of those two Seasons describes a table that is
+  not the published one.
+- **One reliability diagram, two things measured with it.** `epl.metrics.diagram` is the ten bins,
+  the right-open edges and the rounding; `epl.metrics.reliability` one-hots three ordinal Outcomes
+  into it and `Validation.reliability` pools three binary events into it. Only the front differs,
+  and it has to — but the middle must not, or the projection's 0.008 and the scoreboard's 0.006
+  would be two measurements rather than one measurement of two things. The count column is named by
+  the caller (`predictions` against `projections`) for the reason `f714c28` renamed a clashing
+  column at stage 8: a Club-projection is not a Prediction, and a reader with both files open should
+  not find one word meaning two things.
+- **The Season-and-tier cut is written once**, in `epl.simulate.checkpoints.season_fixtures`, and
+  the three places that want it call it: where a projection is taken, where the Season is split at
+  that instant, and where the table it eventually produced is read. Three copies is three places for
+  `PROJECTED_DIVISION` to quietly become the literal `"E0"` — which had already happened once, in
+  the command line's default season list, and is why the helper exists. One consequence is worth
+  knowing: a Season the corpus does not hold now raises `CheckpointError` from all three rather than
+  each module's own error, which is what that exception already meant.
+
+### Measured at stage 11 (26 Aug 2026)
+
+- **Points ties are routine and goal difference settles all of them.** Over the 26 ingested
+  Seasons, **24 had at least one pair of Clubs level on points** and there were **85 tied pairs in
+  all, 3.3 a Season** — which reproduces the design's figure exactly and is why the Season
+  Projection could not be built on Elo. And then: **not one pair in 26 years was still level after
+  goals scored.** The two head-to-head steps and the coin flip beneath them have never been needed
+  by a real Premier League final table. They are there for the simulated ones, and a projection
+  reports its own `level_pairs` so that "how often did the lower half of the chain decide
+  anything?" is a number rather than an assumption.
+- **The walk is not the expensive half, by three orders of magnitude.** Ten thousand Seasons over a
+  real half-Season of Fixtures and 4,000 posterior draws takes **2.7 seconds**. The posterior fit
+  in front of it took **537 seconds** at the shipped sampler settings — rather more than stage 10's
+  231 s at the first round of 2015/16, which is worth knowing before planning a validation run.
+- **Drawing from the posterior widens the table exactly as ADR 0007 says it should.** At 2011/12's
+  first checkpoint, with 331 Fixtures still to play, Manchester United's title probability comes out
+  **0.853 from the posterior mean, 0.850 from the MLE and 0.772 from the draws** — entropy across
+  the twenty Clubs 0.52 against 0.75. The point estimate and the mean agree with each other and
+  disagree with the honest answer, which is the shape of ADR 0007's 48%-versus-34% claim on real
+  football rather than in the abstract.
+- **The same effect, isolated.** Over a synthetic posterior that cannot decide which of two Clubs
+  is the strong one, the other two Clubs take the title **6.3% of the time from the draws and 20.4%
+  from their mean**; and the Club the draws are undecided about finishes bottom 17.4% of the time
+  from the draws against 11.1% from the mean. A mean of "a is dominant" and "b is dominant" is "a
+  and b are both fairly good", which is a claim neither draw made — in both directions.
+- **2015/16 at Christmas, which is the projection's own worked example.** Leicester led on 38 points
+  with 210 Fixtures left. The projection gives them **0.0577** for the title, behind Arsenal at
+  0.5165 and Manchester City at 0.3572, and gives them 0.63 for a European place. They won it. That
+  is not a failure of the projection so much as the whole reason the Season is remembered, and it is
+  the number the command prints, so it is the number this file quotes.
+
+### The validation: where the real champion landed
+
+`python -m epl.simulate validate --seasons 2005 2024 --checkpoints 3 --draws 300 --tune 500
+--chains 2`, run 26 Aug 2026 — **60 projections across the 20 completed Evaluation Window Seasons,
+10,000 simulated Seasons each, 98 minutes**. The sampler settings are below what the module ships
+with, and that is stated rather than buried: 60 fits at the shipped settings is nine hours. The full
+six-checkpoint, full-sampler run is the overnight job and the command for it is the same one.
+
+- **The eventual champion was the projection's own favourite 73% of the time, and in its top three
+  97%** — 58 of 60. The three it put outside its top three are 2007/08 (Manchester United third
+  behind Chelsea in September), 2015/16 and 2016/17.
+- **It gave the eventual champion a mean title probability of 0.581, and its favourite 0.666.** The
+  gap between those two is the honest cost of being wrong about the favourite a quarter of the time.
+- **Ten-bin calibration error: title 0.012, European places 0.012, relegation 0.018, pooled 0.008.**
+  For comparison, every match Predictor on the scoreboard sits at about 0.006 pre-calibration, and
+  the margin map at 0.019. So a Season Projection is about as well calibrated as the Predictors it
+  is built from — which is what "calibrated and not merely plausible" was asking.
+- **The distribution tightens exactly as it should, and this is the number the six checkpoints were
+  spread across a Season to produce:**
+
+  | checkpoint | Fixtures left | probability given the eventual champion | favourite's own | champion was the favourite |
+  |---|---|---|---|---|
+  | 1 | 331 | 0.405 | 0.590 | 55% |
+  | 2 | 207 | 0.609 | 0.651 | 85% |
+  | 3 | 102 | 0.729 | 0.758 | 80% |
+
+- **Leicester is the whole exercise in one row.** 2015/16 at the first checkpoint: **0.0008**, eighth
+  favourite of twenty. At Christmas: 0.0599, third. In March with 92 Fixtures left: 0.5258, and the
+  favourite at last. A projection that had said anything else in September would have been wrong
+  about every other Season, and one that could not get to 0.53 by March would not be reading the
+  table in front of it.
+- **The largest miss is 2011/12**, where Manchester City won on goal difference on the final day and
+  the projection had Manchester United at 0.777 in September against City's 0.065. It never made
+  City favourite at any of the three checkpoints. That is a real miss rather than a rounding one,
+  and it is what a 73% hit rate looks like from the inside.
+- **These points are not independent and no summary above should be read as though they were.**
+  Within one projection the twenty Clubs' title probabilities sum to one; the three checkpoints of a
+  Season concern the same champion. 3,600 Club-projections carry far less information than 3,600
+  independent forecasts, so the diagram is a shape rather than a significance test. `validate` prints
+  that sentence under every diagram it produces.
+
 ## Open risks
 
 1. **BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.

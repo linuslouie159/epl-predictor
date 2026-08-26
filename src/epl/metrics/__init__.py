@@ -35,8 +35,11 @@ what none of them does is make one.
 
 from epl.metrics.calibration import (
     BINS,
+    COUNTED_AS,
     EDGE_PRECISION,
     RELIABILITY_COLUMNS,
+    diagram,
+    error_of,
     expected_calibration_error,
     reliability,
 )
@@ -64,6 +67,7 @@ from epl.metrics.scores import (
 
 __all__ = [
     "BINS",
+    "COUNTED_AS",
     "EDGE_PRECISION",
     "LOG_LOSS_FLOOR",
     "OUTCOMES",
@@ -77,6 +81,8 @@ __all__ = [
     "as_predictions",
     "brier",
     "brier_per_prediction",
+    "diagram",
+    "error_of",
     "expected_calibration_error",
     "hits",
     "log_loss",

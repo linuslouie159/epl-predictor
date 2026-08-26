@@ -106,6 +106,35 @@ Do not "fix" these without reading the linked ADR first:
   shrinks makes it a different model from the MLE and ADR 0007 forbids exactly that. See
   `epl.simulate.posterior.Priors`; tightening them to something reasonable-looking moves a single
   Fixture's Home probability by 0.079.
+- **The tiebreaker chain has two more steps than the Premier League's own regulation.** The
+  competition goes points → goal difference → goals scored → play-off at a neutral ground, with no
+  head-to-head step at all; `epl.simulate.table.TIEBREAKERS` puts head-to-head points and
+  head-to-head away goals in between, because issue #15 asks for them by name. It is a strict
+  refinement — it changes nothing the regulation decides and replaces some coin flips with a rule.
+  Do not "correct" it to the regulation without reading the ticket. Measured: **no real final table
+  in the 26 ingested Seasons has ever needed those two steps**, so they exist for the simulated
+  tables, and every `Projection` reports its own `level_pairs` rather than assuming.
+- **A `Slate` cannot express the result of a Fixture that has not been played**, and that is the
+  point of the type rather than an oversight. Validation hands a projection a corpus containing
+  every result it is supposed to be forecasting, so `Slate.of(played, remaining)` reads goals off
+  the first frame and only the two Club columns off the second. Do not add a convenience that takes
+  one frame and a mask.
+- **A Season Projection has two seeds and both are recorded.** The sampler's is on `Diagnostics`,
+  the walk's is on `Simulation`, and they are deliberately different numbers so no reader mistakes
+  one for the other being reused. `Projection.describe()` prints both.
+- **`epl.simulate.projection.draw_order` lays down whole copies of every draw rather than
+  truncating a permutation.** The obvious version leaves some draws used three times and others
+  once; and walking the draws in order would be worse still, because `fit` concatenates its chains,
+  so the first quarter of a posterior belongs to one chain.
+- **A Season the corpus does not hold raises `CheckpointError`, not `ProjectionError`**, from
+  `slate_at` and `final_positions` as well as from `projection_rounds`. All three cut the corpus
+  through `epl.simulate.checkpoints.season_fixtures`, written once so `PROJECTED_DIVISION` cannot
+  quietly become the literal `"E0"` in one of them — and that error already means "a Season
+  Projection was asked for where none can be taken". Do not give each module its own copy back.
+- **A projection's reliability diagram counts `projections` where a Predictor's counts
+  `predictions`**, and both are binned by the same `epl.metrics.diagram`. The shared middle is what
+  makes 0.008 and 0.006 comparable; the different column name is what stops a Club-projection being
+  read as a Prediction. Neither half is an accident.
 - **Refreshing a cached raw file archives the old bytes** into `superseded/` instead of replacing
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
   Both are explained where they live — `src/epl/ingest/cache.py`, which both the Football-Data
@@ -197,6 +226,52 @@ one opaque node so no second likelihood exists (ADR 0007), fitted only at Season
 The two fits agree on a real Fixture to **0.0090**, which is what licenses the split at all. One
 posterior fit takes about **four minutes** against the MLE's 0.22 seconds.
 `python -m epl.simulate checkpoints` and `python -m epl.simulate posterior`.
+
+**Stage 11 is built**: the Monte Carlo Season Projection (`src/epl/simulate/table.py`,
+`projection.py`, `validation.py`, issue #15) — the final league table and its full tiebreaker chain
+in a module that has never heard of a posterior, a 10,000-Season walk over the draws with both seeds
+recorded, and a validation across completed Seasons that asks where the real champion landed.
+`python -m epl.simulate project` and `python -m epl.simulate validate`.
+
+Validated across the 20 completed Evaluation Window Seasons at three checkpoints each: the eventual
+champion was the projection's favourite **73%** of the time and in its top three **97%**, it gave
+the champion a mean title probability of **0.581**, and its ten-bin calibration error is **0.008**
+pooled — against about 0.006 for every match Predictor on the scoreboard.
+
+Seven things about stage 11 worth knowing before building on it:
+
+- **The validation numbers in the docs came from a reduced run, and that is stated everywhere they
+  appear.** 60 fits at `--draws 300 --tune 500 --chains 2` took 98 minutes; the same 60 at the
+  shipped sampler settings is about nine hours, and all six checkpoints is nineteen. Do not quote
+  the numbers as though they came from the full run, and do not quietly re-run at other settings and
+  overwrite them without saying so.
+- **The walk is not the expensive half and never was.** Ten thousand Seasons over half a Season of
+  Fixtures and 4,000 draws takes **2.7 seconds**; the posterior fit in front of it took **537**. So
+  re-walking one fit with a different seed, different bands or a sensitivity check is free, which is
+  why `project` takes an already-fitted `posterior` and `simulate` is a separate function. Note that
+  537 s is well above stage 10's measured 231 s at the first round of 2015/16 — budget from the
+  higher number before planning a run of a hundred and twenty-six of them.
+- **Drawing from the posterior is worth what ADR 0007 said it was, measured on real football.** At
+  2011/12's first checkpoint, Manchester United's title probability is **0.853 from the posterior
+  mean, 0.850 from the MLE and 0.772 from the draws**. The point estimate and the mean agree with
+  each other and disagree with the honest answer — which is the whole argument, and the reason
+  `Posterior.mean()` must never be what a projection runs on.
+- **Points ties are routine; the head-to-head steps have never once been needed.** 24 of 26 Seasons
+  had a pair level on points, 85 pairs in all — and goal difference or goals scored settled every
+  single one. That is why `Finish.level_pairs` exists: a projection says how many of its ten
+  thousand tables reached the lower half of the chain instead of assuming the answer.
+- **The corpus knows who won and the projection must not.** `tests/simulate/test_projection_over_the_corpus.py`
+  projects 2015/16 from Christmas, when every remaining result is sitting in the match table it was
+  handed, and checks Leicester's title probability is between 0 and 0.5. It comes out **0.058**,
+  behind Arsenal's 0.517. They won. That number is the worked example everywhere in the docs, and it
+  is quoted rather than a comfortable one on purpose.
+- **`epl.simulate.table` is the seam, and it must stay ignorant.** It takes Fixtures and goals and
+  returns positions, so every step of the chain is exercised against hand-built leagues of three and
+  four Clubs. The tests that carry the weight are the ones where two steps disagree. Do not give it
+  a posterior, a Predictor or an As-Of Instant.
+- **`validate` hands its caller every result the moment it exists**, and the command line writes the
+  file on every one. A run of this length that returned nothing until the end loses everything to a
+  single interruption — which happened once during the build, at 20 of 60 fits.
 
 Six things about stage 10 worth knowing before building on it:
 
@@ -420,21 +495,18 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Issue #15 — the Monte Carlo Season Projection**, which stage 10 unblocked and which is the last
-modelling stage. It reads `epl.simulate.posterior.Posterior` — draws of `Strengths`, one per
-simulated Season, never `mean()` — and `epl.simulate.checkpoints.projection_rounds` says where a
-projection may be taken from. The Scoreline grid it needs is already written
-(`epl.models.likelihood.scorelines`); what is new is the tiebreaker chain, the 10,000-Season walk
-and the recorded seed. Note that the seed has two halves now: the sampler's, on every
-`Diagnostics`, and the simulation's.
+**The modelling stages are done.** What is left open is the *live* half — **#16** (BBC Pundit
+spike) and **#17** (sealing a round before kickoff), which are where open risks 1 and 2 live. #17 is
+also what turns the Season Projection from a historical exercise into a weekly one: a live Season is
+projected at every Prediction Round (`projection_rounds(..., live=True)`), and the Fixtures still to
+come have to be handed in from `fixtures.csv` rather than found in the corpus — `slate_at` says so
+in its docstring, and it is the one part of the projection with no live path yet.
 
 Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
 unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage
 lands and there is no appetite to start the next one.
 
-The model target is met, so there is no longer a pending question about accuracy. What is left open
-is the *live* half — #16 (BBC Pundit spike) and #17 (sealing a round before kickoff), which are
-where open risks 1 and 2 live.
+The model target is met, so there is no longer a pending question about accuracy.
 
 Check the graph before starting:
 
@@ -466,6 +538,8 @@ python -m epl.models strengths # Dixon-Coles' attack and defence at the same ins
 python -m epl.models sequential      # ADR 0002's diagnostic: per Fixture against per round
 python -m epl.simulate checkpoints   # where a Season is projected from, and where it is not
 python -m epl.simulate posterior     # fit one posterior, and read it beside the MLE
+python -m epl.simulate project       # one Season Projection: title, Europe and relegation
+python -m epl.simulate validate      # project completed Seasons; where the real champion landed
 pytest                         # add --run-network to also hit football-data.co.uk
 ```
 

@@ -134,6 +134,11 @@ outputs/sequential.csv  every Fixture predicted per round and per kickoff; regen
 src/epl/simulate/       Bayesian fit + Monte Carlo Season Projection
 src/epl/simulate/posterior.py     the same likelihood sampled instead of maximised (ADR 0007)
 src/epl/simulate/checkpoints.py   the handful of rounds a posterior is allowed to run at
+src/epl/simulate/table.py         the final league table and the chain that breaks a tie in it
+src/epl/simulate/projection.py    the 10,000-Season walk over the draws, and the two seeds
+src/epl/simulate/validation.py    where the real champion landed, across completed Seasons
+outputs/projection.csv  one Season Projection: title, Europe, relegation; regenerable, gitignored
+outputs/projection_validation.csv  every projection against what happened; regenerable, gitignored
 src/epl/ledger/         Prediction stores, the row audit, the scoreboard
 outputs/backtest/       regenerable, gitignored — one file per Predictor
 outputs/live/           SEALED, committed, append-only — one file per Prediction Round
@@ -450,6 +455,78 @@ There is no second likelihood. The sampler is handed
 `epl.models.likelihood.negative_log_likelihood` itself as one opaque node — it already returns its
 own analytic gradient — so the arithmetic being sampled is the arithmetic being optimised rather
 than a copy of it that could drift.
+
+## The Season Projection
+
+A distribution over final league tables: every Fixture that has not been played is simulated to a
+Scoreline, the Season is resolved through the full tiebreaker chain, and **10,000 simulated Seasons**
+are counted into a probability of the title, of a European place and of relegation for every Club.
+
+```
+python -m epl.simulate project       # one projection: the title, Europe and relegation
+python -m epl.simulate validate      # project completed Seasons and see where the champion fell
+```
+
+Strengths are **drawn from the posterior on every simulated Season**, never fixed at a point
+estimate. That is the whole reason the expensive fit exists, and on real football it is worth what
+ADR 0007 says: at 2011/12's first checkpoint Manchester United's title probability is 0.853 from
+the posterior mean, 0.850 from the MLE and **0.772 from the draws**. The point estimate and the
+posterior mean agree with each other and disagree with the honest answer.
+
+**Two seeds, both recorded** — the sampler's and the walk's — so a published projection is
+reproducible exactly. The walk itself is cheap: 10,000 Seasons over half a Season of Fixtures and
+4,000 draws takes **2.7 seconds** against the posterior fit's nine minutes in front of it.
+
+The chain that settles a tie is **points, goal difference, goals scored, head-to-head points,
+head-to-head away goals, then a play-off at a neutral ground taken as a coin flip**. Ties on points
+are routine — 24 of the 26 ingested Seasons had one, 85 pairs in all — and goal difference settles
+every one of them: **no real final table in 26 years has ever needed the head-to-head steps.** They
+are there for the simulated tables, and each projection reports how many of its own needed them.
+
+The chain here has two more steps than the competition's own regulation, which goes straight from
+goals scored to the play-off. That is the ticket's specification, it is a strict refinement — it
+changes nothing the regulation decides and replaces some coin flips with a rule — and it is stated
+rather than assumed in `epl.simulate.table`.
+
+**European places means the top four of the league table**, which is a simplification stated in the
+code: England has had a fifth place in some recent Seasons on UEFA's coefficient, and a European
+place can also be won by lifting a cup, which is not a league position at all.
+
+2015/16 at Christmas is the worked example, and it is not a flattering one. Leicester led on 38
+points with 210 Fixtures left; the projection gives them **0.058** for the title behind Arsenal's
+0.517 and Manchester City's 0.357. They won it — which is why the Season is remembered, and why the
+number is quoted here rather than a comfortable one.
+
+### Is it calibrated, or only plausible?
+
+Measured, over **60 projections across the 20 completed Evaluation Window Seasons**:
+
+| | |
+|---|---|
+| the eventual champion was the projection's favourite | **73%** of the time |
+| …and in its top three | **97%** (58 of 60) |
+| mean title probability it gave the eventual champion | **0.581** |
+| ten-bin calibration error (title / Europe / relegation / pooled) | 0.012 / 0.012 / 0.018 / **0.008** |
+
+For scale, every match Predictor on the scoreboard sits at a ten-bin error of about 0.006 and the
+margin map at 0.019, so a Season Projection is about as well calibrated as the model it is built on.
+
+And it tightens, which is what taking six checkpoints across a Season was for:
+
+| Fixtures left | probability given the eventual champion | champion was the favourite |
+|---|---|---|
+| 331 | 0.405 | 55% |
+| 207 | 0.609 | 85% |
+| 102 | 0.729 | 80% |
+
+Leicester is the whole exercise in three rows: **0.0008** in September (eighth favourite of twenty),
+0.060 at Christmas, **0.526** and favourite by March. The largest miss is 2011/12, where Manchester
+City won on goal difference on the final day and the projection never made them favourite at any
+checkpoint.
+
+**These points are not independent** — twenty Clubs share one table, three checkpoints share one
+champion — so the diagram is a shape rather than a significance test, and `validate` prints that
+caveat under every one it produces.
 
 ## Calibration
 

@@ -1,7 +1,21 @@
-"""Command line entry point for the Bayesian fit.
+"""Command line entry point for the Bayesian fit and the Season Projection over it.
 
     python -m epl.simulate checkpoints   where a Season would be projected from, and where not
     python -m epl.simulate posterior     fit one, and read it beside the MLE of the same model
+    python -m epl.simulate project       one Season Projection: the title, Europe and relegation
+    python -m epl.simulate validate      project completed Seasons and see where the champion fell
+
+``project`` is issue #15's answer in the form the question is usually asked: who wins the league.
+It fits a posterior at one checkpoint, plays the rest of the Season out ten thousand times, and
+prints the table with both seeds beside it so the run can be reproduced.
+
+``validate`` is the criterion that stops a projection being merely plausible. It projects completed
+Seasons from their checkpoints, joins each to the table that Season actually produced, and reports
+where the real champion landed and how close the promised probabilities came to the observed rates.
+It is the overnight job — one posterior fit per checkpoint, minutes each — so ``--seasons``,
+``--checkpoints`` and the sampler knobs are how to want less of it. It writes its rows after every
+projection rather than at the end, so an interrupted run leaves a readable answer over fewer
+Seasons instead of nothing at all.
 
 ``checkpoints`` is the cheap half and the one that makes ADR 0007's split visible: it prints the
 Prediction Rounds a Season Projection is taken at against the number of rounds the Season has, so
@@ -35,11 +49,25 @@ from epl.ingest import match_table
 from epl.models.dixon_coles import DIXON_COLES
 from epl.models.dixon_coles import fit as fit_mle
 from epl.models.likelihood import Sample, Strengths
+from epl.paths import outputs_dir
 from epl.predictors import Evidence
 from epl.rounds import assign_rounds
-from epl.simulate.checkpoints import CHECKPOINTS_PER_SEASON, projection_rounds
+from epl.simulate.checkpoints import (
+    CHECKPOINTS_PER_SEASON,
+    PROJECTED_DIVISION,
+    projection_rounds,
+)
 from epl.simulate.posterior import SAMPLING, Posterior, Sampling, fit
+from epl.simulate.projection import SIMULATION, Projection, Simulation, project
+from epl.simulate.table import TIEBREAKERS
+from epl.simulate.validation import EVENTS, validate
 from epl.windows import EVALUATION_WINDOW, season_label
+
+#: What one posterior fit costs, for the estimate ``validate`` prints before committing a reader to
+#: a run of sixty of them. Measured rather than assumed, and a range rather than a number: 231 s at
+#: 2015/16's first Prediction Round (stage 10) and 537 s at its mid-Season checkpoint, so the upper
+#: end is what a plan should be made against. Only ever used to print an estimate.
+MINUTES_A_FIT = 9
 
 #: The sentence issue #14's last acceptance criterion asks for, in one place so that every output
 #: comparing the two fits carries the same wording.
@@ -76,9 +104,31 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help=f"which of the Season's {CHECKPOINTS_PER_SEASON} checkpoints (default: the first)",
     )
-    draw.add_argument("--draws", type=int, default=SAMPLING.draws)
-    draw.add_argument("--tune", type=int, default=SAMPLING.tune)
-    draw.add_argument("--chains", type=int, default=SAMPLING.chains)
+    _add_sampling(draw)
+
+    table = sub.add_parser("project", help="one Season Projection: title, Europe and relegation")
+    table.add_argument("--season", type=int, default=min(EVALUATION_WINDOW))
+    table.add_argument(
+        "--checkpoint",
+        type=int,
+        default=(CHECKPOINTS_PER_SEASON - 1) // 2,
+        help=f"which of the Season's {CHECKPOINTS_PER_SEASON} checkpoints (default: mid-Season)",
+    )
+    _add_sampling(table)
+    _add_walk(table)
+
+    check = sub.add_parser("validate", help="project completed Seasons and score the projections")
+    check.add_argument(
+        "--seasons",
+        type=int,
+        nargs=2,
+        metavar=("FIRST", "LAST"),
+        default=None,
+        help="Seasons to validate over (default: the whole Evaluation Window, minus the live one)",
+    )
+    check.add_argument("--checkpoints", type=int, default=CHECKPOINTS_PER_SEASON)
+    _add_sampling(check)
+    _add_walk(check)
 
     args = parser.parse_args(argv)
     if args.command == "checkpoints":
@@ -88,9 +138,56 @@ def main(argv: list[str] | None = None) -> int:
             args.matches,
             args.season,
             args.checkpoint,
-            Sampling(draws=args.draws, tune=args.tune, chains=args.chains),
+            _sampling(args),
+        )
+    if args.command == "project":
+        return _project(
+            args.matches,
+            args.season,
+            args.checkpoint,
+            _sampling(args),
+            Simulation(seasons=args.simulations, seed=args.seed),
+        )
+    if args.command == "validate":
+        return _validate(
+            args.matches,
+            args.seasons,
+            args.checkpoints,
+            _sampling(args),
+            Simulation(seasons=args.simulations, seed=args.seed),
         )
     raise AssertionError(f"unhandled command {args.command!r}")  # pragma: no cover
+
+
+def _sampling(args: argparse.Namespace) -> Sampling:
+    """The sampler settings the three fitting commands share, read off one parsed namespace."""
+    return Sampling(
+        draws=args.draws, tune=args.tune, chains=args.chains, seed=args.sampler_seed
+    )
+
+
+def _add_sampling(parser: argparse.ArgumentParser) -> None:
+    """The knobs on the expensive half. Lowering them is how a run finishes this afternoon.
+
+    ``--sampler-seed`` is here for the same reason ``--seed`` is on the walk: a published
+    projection records both, and a recorded seed with no way to hand it back is not a way to
+    reproduce anything.
+    """
+    parser.add_argument("--draws", type=int, default=SAMPLING.draws)
+    parser.add_argument("--tune", type=int, default=SAMPLING.tune)
+    parser.add_argument("--chains", type=int, default=SAMPLING.chains)
+    parser.add_argument("--sampler-seed", type=int, default=SAMPLING.seed)
+
+
+def _add_walk(parser: argparse.ArgumentParser) -> None:
+    """The knobs on the cheap half, including the seed a published projection is reproduced by."""
+    parser.add_argument(
+        "--simulations",
+        type=int,
+        default=SIMULATION.seasons,
+        help=f"how many Seasons the walk plays out (default: {SIMULATION.seasons:,})",
+    )
+    parser.add_argument("--seed", type=int, default=SIMULATION.seed)
 
 
 def _checkpoints(matches_path: Path | None, season: int, live: bool) -> int:
@@ -155,6 +252,148 @@ def _posterior(
     # early. Issue #14's last criterion is about any published comparison, not about that one.
     print(f"\n{DIFFERENT_FITS}")
     return 0
+
+
+def _project(
+    matches_path: Path | None,
+    season: int,
+    checkpoint: int,
+    sampling: Sampling,
+    simulation: Simulation,
+) -> int:
+    """One Season Projection, printed and written."""
+    matches = match_table(matches_path)
+    chosen = projection_rounds(matches, season)
+    if not 0 <= checkpoint < len(chosen):
+        raise SystemExit(
+            f"{season_label(season)} has {len(chosen)} checkpoints; asked for index {checkpoint}"
+        )
+
+    at = chosen.iloc[checkpoint]
+    print(
+        f"{season_label(season)} checkpoint {checkpoint + 1} of {len(chosen)}, "
+        f"as of {pd.Timestamp(at['as_of_instant']).date()}"
+    )
+    print(f"fitting the posterior ({sampling.chains} chains x {sampling.draws} draws)... "
+          "this is minutes, not seconds", flush=True)
+
+    clock = time.perf_counter()
+    projection = project(matches, season, at, sampling=sampling, simulation=simulation)
+    print(f"fitted and walked in {time.perf_counter() - clock:.0f}s\n")
+
+    _print_projection(projection)
+    print(f"\n{DIFFERENT_FITS}")
+    written = _write(projection.published(), "projection")
+    print(f"\nwritten to {written}")
+    return 0
+
+
+def _print_projection(projection: Projection) -> None:
+    """The table, the two seeds and the chain that settled every tie in it."""
+    print(projection.describe())
+    for concern in projection.diagnostics.concerns():
+        print(f"  ! {concern}")
+    if not projection.diagnostics.healthy:
+        print("  the posterior beneath this projection did not converge; do not publish it")
+
+    print("\nties settled by: " + " -> ".join(TIEBREAKERS))
+    print()
+    table = projection.table().copy()
+    for column in EVENTS:
+        table[column] = table[column].map(lambda share: f"{share:.4f}")
+    table["mean_points"] = table["mean_points"].map(lambda points: f"{points:.1f}")
+    table["mean_position"] = table["mean_position"].map(lambda place: f"{place:.2f}")
+    print(table.to_string(index=False))
+
+
+def _validate(
+    matches_path: Path | None,
+    seasons: list[int] | None,
+    checkpoints: int,
+    sampling: Sampling,
+    simulation: Simulation,
+) -> int:
+    """Project completed Seasons from their checkpoints and score what came back."""
+    matches = match_table(matches_path)
+    wanted = _seasons_to_validate(matches, seasons)
+    total = len(wanted) * checkpoints
+    print(
+        f"validating {len(wanted)} Seasons x {checkpoints} checkpoints = {total} posterior fits.\n"
+        f"At the shipped sampler settings that is roughly {total * MINUTES_A_FIT / 60:.1f} hours; "
+        "--seasons, --checkpoints and\n--draws/--tune/--chains are how to want less of it. "
+        "Rows are written after every projection.\n"
+    )
+
+    done = 0
+    clock = time.perf_counter()
+    so_far: list[pd.DataFrame] = []
+
+    def progress(projection: Projection, rows: pd.DataFrame) -> None:
+        """Print where the run has got to, and save what it has — see :func:`validate`.
+
+        Written every time rather than once at the end. An interrupted eight-hour run that had
+        kept nothing would have to start again, and a partial file is a perfectly readable answer
+        over fewer Seasons.
+        """
+        nonlocal done
+        done += 1
+        so_far.append(rows)
+        _write(pd.concat(so_far, ignore_index=True), "projection_validation")
+        leader = projection.table().iloc[0]
+        print(
+            f"[{done}/{total}] {projection.where}  "
+            f"{projection.remaining} to play, favourite {leader['club']} "
+            f"{leader['title']:.3f}  ({time.perf_counter() - clock:.0f}s elapsed)",
+            flush=True,
+        )
+
+    validation = validate(
+        matches,
+        wanted,
+        checkpoints=checkpoints,
+        sampling=sampling,
+        simulation=simulation,
+        on_projection=progress,
+    )
+
+    print(f"\n{validation.describe()}\n")
+    print("where the real champion landed, by how much of the Season was left:")
+    print(validation.champions().to_string(index=False))
+    print("\nreliability over the title, European places and relegation pooled:")
+    print(validation.reliability().to_string(index=False))
+    print(
+        "\nthese points are not independent — twenty Clubs share one table and six checkpoints\n"
+        "share one champion — so read the diagram as a shape, not as a significance test."
+    )
+    written = _write(validation.rows, "projection_validation")
+    print(f"\nwritten to {written}")
+    return 0
+
+
+def _seasons_to_validate(matches: pd.DataFrame, seasons: list[int] | None) -> list[int]:
+    """Which Seasons to validate over: the ones asked for, or every completed Season scored.
+
+    The live Season is dropped rather than refused. It has no final table, so there is nothing to
+    validate against, and leaving it in would turn "validate the Evaluation Window" into an error.
+    """
+    if seasons is not None:
+        return list(range(seasons[0], seasons[1] + 1))
+
+    played = matches.loc[matches["division"] == PROJECTED_DIVISION]
+    complete = played.groupby("season").size()
+    return [
+        season
+        for season in EVALUATION_WINDOW
+        if season in complete.index and complete[season] >= complete.max()
+    ]
+
+
+def _write(table: pd.DataFrame, name: str) -> Path:
+    """Regenerable and gitignored, like every other report this project publishes."""
+    path = outputs_dir() / f"{name}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(path, index=False)
+    return path
 
 
 def _fixtures_of(matches: pd.DataFrame, prediction_round: str) -> pd.DataFrame:

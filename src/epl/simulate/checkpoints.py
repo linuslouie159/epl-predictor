@@ -61,6 +61,37 @@ class CheckpointError(Exception):
 PROJECTED_DIVISION = "E0"
 
 
+def season_fixtures(
+    matches: pd.DataFrame, season: int, *, division: str = PROJECTED_DIVISION
+) -> pd.DataFrame:
+    """One Season's Fixtures in one tier — the cut every part of a projection starts from.
+
+    Written once because three of them want it and they must agree: this module picks the rounds a
+    projection is taken at, :func:`epl.simulate.projection.slate_at` splits the same Season at one
+    of those instants, and :func:`epl.simulate.validation.final_positions` reads the table it
+    eventually produced. Three copies of "which rows are this Season?" is three places for
+    :data:`PROJECTED_DIVISION` to quietly become a literal.
+
+    Refuses an empty cut rather than returning one. A Season with no Fixtures is not a Season with
+    nothing to say about it; it is a Season the corpus does not hold, and the error names what it
+    does.
+    """
+    missing = {"season", "division"} - set(matches.columns)
+    if missing:
+        raise CheckpointError(
+            f"a match table needs {sorted(missing)} to be cut into Seasons and tiers; "
+            f"got {sorted(matches.columns)[:8]}"
+        )
+
+    within = matches.loc[(matches["division"] == division) & (matches["season"] == season)]
+    if within.empty:
+        raise CheckpointError(
+            f"no {division} Fixtures in {season_label(season)}, so there is no Season to project. "
+            f"The corpus holds {_seasons_in(matches)}"
+        )
+    return within
+
+
 def projection_rounds(
     matches: pd.DataFrame,
     season: int,
@@ -82,21 +113,7 @@ def projection_rounds(
     which rounds are candidates, and narrows nothing about the fit taken at one: a posterior at any
     of these instants is fitted over the whole pyramid, exactly as the MLE is.
     """
-    missing = {"season", "division"} - set(matches.columns)
-    if missing:
-        raise CheckpointError(
-            f"a match table needs {sorted(missing)} to be cut into Seasons and tiers; "
-            f"got {sorted(matches.columns)[:8]}"
-        )
-
-    within = matches.loc[(matches["division"] == division) & (matches["season"] == season)]
-    if within.empty:
-        raise CheckpointError(
-            f"no {division} Fixtures in {season_label(season)}, so there is no Season to project. "
-            f"The corpus holds {_seasons_in(matches)}"
-        )
-
-    rounds = prediction_rounds(within)
+    rounds = prediction_rounds(season_fixtures(matches, season, division=division))
     if live:
         return rounds
 
@@ -139,4 +156,5 @@ __all__ = [
     "FIRST_CHECKPOINT_AT",
     "CheckpointError",
     "projection_rounds",
+    "season_fixtures",
 ]
