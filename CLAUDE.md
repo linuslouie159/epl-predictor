@@ -646,9 +646,16 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Every ticket in the tracker is now built, #18 included.** The modelling stages are done, the live
-loop is built, the deferred features are written down, and what is left is not a stage — it is one
-unproven input and three issues worth filing.
+**Every ticket through #18 is built.** The modelling stages are done, the live loop is built, and
+the deferred features are written down. What is left is **#19** — running the live loop on a
+schedule, filed out of stage 13's "deliberately not scheduled" — plus one unproven input and three
+issues worth filing.
+
+**#19 is blocked on that input rather than on a decision, and the ticket says so.** A schedule built
+today would fire twice a week onto a `fixtures.csv` with no Premier League row in it, forever. Its
+two real questions — GitHub Actions versus local cron, given that either must *push commits to this
+repository* for a sealed round to prove anything, and what time on Tuesday and Friday afternoon it
+fires — are the repository owner's to answer, not an agent's.
 
 **The one thing to re-check before anything else**: run `python -m epl.live upcoming` on a Friday
 afternoon of a Premier League round. If `fixtures.csv` carries E0 rows, the live half works today
@@ -662,7 +669,9 @@ stub.
 **Three issues worth filing, none of them in scope anywhere yet:**
 
 - **A confirmed source of upcoming Premier League Fixtures.** The live loop is complete and idle
-  without one. API-Football is the named candidate and #18's stub is where the case for it lives.
+  without one, and #19 is blocked on it. API-Football is the named candidate and
+  `epl.v2.api_football` is where the case for it lives — including the conditions that would
+  revive it.
 - **The live Season Projection.** `projection_rounds(..., live=True)` exists and `slate_at` cannot be
   fed: a projection needs every remaining Fixture of the campaign, and the rolling file's horizon is
   two days. Blocked on the same source as above.
