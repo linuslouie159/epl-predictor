@@ -9,11 +9,23 @@ same machine. This file answers *how*, and tries not to repeat it.
 
 **Two things to know before you start.**
 
-**Nothing here has ever been run.** The image was written on a machine with no running Docker, so
-every command below is checked statically — `docker compose config` parses, the `sed` in the
-Dockerfile is guarded by a `grep` that fails the build loudly if its assumption breaks, and the cron
-wrapper was tested end to end against a stubbed `docker`. The conda solve on aarch64 is the one step
-with no evidence behind it. Expect step 3 to be where trouble is, if there is any.
+**This has been built and run once — on amd64, not on a Pi.** On 27 Aug 2026 the image was built on
+an x86-64 desktop and exercised end to end: the entrypoint answers, the bind mount and editable
+install put `/repo/src` on the path, `uk_now()` reads UK wall-clock time inside the container, the
+full `upcoming --cached` path exits 0, and git runs against the mounted repository with no "dubious
+ownership" complaint. Steps 6, 7 and the compose wiring are therefore checked rather than assumed.
+
+**What that does not cover, and it is the part most likely to bite:**
+
+- **The conda solve on aarch64.** It took **24 minutes on a desktop** (1450 s for `conda env create`
+  alone, of a 27-minute build). A Pi 5 will be slower, and this is the step that fails if
+  conda-forge cannot resolve this environment for `linux-aarch64`. Nothing below proves it can.
+- **RAM.** A desktop build says nothing about a 4 GB Pi. See step 0.
+- **The SSH push.** Step 7 was run and reached the remote-auth stage, but the desktop's remote is
+  HTTPS, so what it proved is that git works and `safe.directory` is wired — not that a mounted
+  deploy key does. That part is genuinely first-run on the Pi.
+
+The image came out at **6 GB**, which is the cost of full `environment.yml` parity. Budget the disk.
 
 **The loop will seal nothing, and that is correct.** `fixtures.csv` has never been observed carrying
 a Premier League row — three fetches, 21 and twice on 27 Aug 2026 — so every fire will report "no
@@ -120,8 +132,12 @@ cd ~/epl-predictor
 docker build -f deploy/Dockerfile -t epl-predictor:live .
 ```
 
-This is the slow step — the conda solve dominates it, and on a Pi that is a long wait. If you have a
-desktop with Docker, cross-building there and loading the result is usually the better trade:
+This is the slow step, and the conda solve dominates it. **Measured on an amd64 desktop, 27 Aug
+2026: 27 minutes total, of which `conda env create` alone was 1450 s.** The image comes out at 6 GB.
+A Pi 5 will be slower on both counts.
+
+That number is the argument for cross-building rather than building natively. It is the same work
+either way, a desktop does it faster, and a desktop cannot be OOM-killed doing it:
 
 ```bash
 # on the desktop, in a clone of this repo
@@ -140,6 +156,9 @@ conflict, which would be the first real evidence that `environment.yml` needs an
 or the `grep` guard failing, which means the pip section of `environment.yml` moved and the
 Dockerfile's comment explains what to do. It is a floating `:latest` base — if a rebuild ever
 behaves differently from a previous one, pin it to a digest before suspecting anything else.
+
+The `grep` guard, the `sed`, the layer split and the editable install were all exercised in the
+amd64 build, so a failure here is about **aarch64 or memory**, not about the Dockerfile's logic.
 
 ---
 
