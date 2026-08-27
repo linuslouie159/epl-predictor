@@ -31,8 +31,13 @@ checks belong here and matter more than any unit test:
 * no file in `outputs/live/` changed after its round's first kickoff
 
 Correcting a genuine bug in a sealed round means adding a superseding row under a new As-Of Instant,
-never editing history. The ingest already applies that same rule to the bytes a Prediction was made
-from — see `epl.ingest.superseded_dir`.
+never editing history — `epl.ledger.live.supersede` is the only door that writes one, and it writes
+a new *revision* of the round's file rather than new bytes in the old one. The ingest already
+applies that same rule to the bytes a Prediction was made from — see `epl.ingest.superseded_dir`.
+
+The loop that fills the sealed store is `epl.live` (stage 13, issue #17). It sits above this package
+rather than inside it: this is the store and its audits, and what to seal is a question about
+upcoming Fixtures, which the ledger has never heard of.
 """
 
 import importlib

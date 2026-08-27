@@ -69,3 +69,8 @@ outputs/sequential.csv
 # A Season Projection is also not a Prediction: nothing in either store knows what one is.
 outputs/projection.csv
 outputs/projection_validation.csv
+
+# The Live Season, scored on its own board by `python -m epl.live score`. Derived from the
+# sealed store and the match table by the same code the Evaluation Window's board uses, so the same
+# reasoning: the *Predictions* under outputs/live/ are the evidence, and a score over them is not.
+outputs/live_scoreboard.csv

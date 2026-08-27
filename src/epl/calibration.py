@@ -33,8 +33,10 @@ where a Pundit scored as-stated is the first input it has something real to fix.
 **Nothing here calibrates a forecast.** The layer runs at scoring time over Predictions whose
 Outcomes are known, so a Prediction sealed for an unplayed Fixture is published raw and gains a
 calibrated form only once its round has been scored. That follows from fitting on Outcomes and is
-the reason the spec puts this "as a shared pipeline step rather than inside any model"; issue #17
-should not read the stored live rows as though they had been corrected.
+the reason the spec puts this "as a shared pipeline step rather than inside any model". The live
+loop honours it by construction: :mod:`epl.live` seals raw Predictions, and `epl.live score` prints
+only the pre-calibration board, because a Season in progress has no track record for a map to
+be fitted on and a calibrated column there would be the raw one under another name.
 
 **What it is.** One isotonic regression per Outcome, fitted one-versus-rest: "when this Predictor
 said 20% Draw, how often was it a Draw?", answered as a monotone step function, then the three

@@ -334,6 +334,10 @@ def slate_at(
 
     For the live Season the corpus holds only what has been played, so the Fixtures still to come
     have to be handed in from ``fixtures.csv`` (:mod:`epl.ingest.fixtures`) rather than found here.
+    Stage 13 measured that file and it **cannot supply them**: its forward horizon is a couple of
+    days, and a projection needs every remaining Fixture of the campaign. So a live projection is
+    blocked on a source of upcoming Fixtures rather than on code here — see docs/DECISIONS.md,
+    "The live loop, and the input it is still waiting for".
 
     A Season the corpus does not hold raises :class:`epl.simulate.checkpoints.CheckpointError`
     rather than :class:`ProjectionError`, because the cut is

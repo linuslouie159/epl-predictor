@@ -19,8 +19,15 @@ _Avoid_: training set, warm-up period
 
 **Evaluation Window**:
 Seasons 2005/06–2025/26 — the span over which Predictors are scored against each other. Begins where
-the Market Line first exists, so every scored Fixture has a market to be compared against.
+the Market Line first exists, so every scored Fixture has a market to be compared against. Closed
+Seasons only, so the numbers over it mean the same thing this week as last.
 _Avoid_: test set, holdout
+
+**Live Season**:
+The Season being played. Ingested, so a Predictor can see it and a Sealed Prediction can be joined to
+a result — and in neither Window: never fitted on, never backfilled, and scored on its own board.
+The last Season ingested is the Live Season, which is what makes moving it one deliberate act.
+_Avoid_: current season, this season, in-season
 
 **As-Of Instant**:
 The moment a Prediction was made. Everything the Predictor knew is, by definition, data timestamped

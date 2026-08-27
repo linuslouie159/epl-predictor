@@ -24,11 +24,20 @@ from epl.ingest import (
     raw_season_path,
 )
 from epl.ingest.football_data import SOURCE
+from epl.windows import LIVE_SEASON
 
 pytestmark = pytest.mark.cache
 
 EVALUATION_WINDOW = range(2005, 2026)
 BURN_IN_WINDOW = range(2000, 2005)
+
+#: The Seasons that are over. Every pinned count below is over these and never over the whole
+#: corpus, because from stage 13 the corpus also holds the Season in progress — which grows every
+#: Saturday, so a count including it would be a test that failed weekly and told nobody anything.
+CLOSED_SEASONS = range(FIRST_SEASON, LIVE_SEASON)
+
+#: 27 Seasons x 4 tiers: 26 closed, plus the one being played.
+CACHED_FILES = 108
 
 
 def _require_cache() -> None:
@@ -39,7 +48,7 @@ def _require_cache() -> None:
         if not raw_season_path(season, division).exists()
     ]
     if missing:
-        pytest.skip(f"raw cache incomplete ({len(missing)} of 104 files missing)")
+        pytest.skip(f"raw cache incomplete ({len(missing)} of {CACHED_FILES} files missing)")
 
 
 @pytest.fixture(scope="module")
@@ -48,14 +57,20 @@ def matches():
     return load_matches()
 
 
+@pytest.fixture(scope="module")
+def closed(matches):
+    """The corpus without the Season in progress — what every fixed count here is about."""
+    return matches[matches["season"].isin(CLOSED_SEASONS)]
+
+
 class TestCoverage:
     def test_every_season_and_tier_is_cached(self) -> None:
         _require_cache()
-        assert len(list(range(FIRST_SEASON, LAST_SEASON + 1))) * len(DIVISIONS) == 104
+        assert len(list(range(FIRST_SEASON, LAST_SEASON + 1))) * len(DIVISIONS) == CACHED_FILES
 
-    def test_the_premier_league_has_a_full_fixture_list_every_season(self, matches) -> None:
-        counts = matches[matches["division"] == "E0"].groupby("season").size()
-        assert set(counts.index) == set(range(FIRST_SEASON, LAST_SEASON + 1))
+    def test_the_premier_league_has_a_full_fixture_list_every_closed_season(self, closed) -> None:
+        counts = closed[closed["division"] == "E0"].groupby("season").size()
+        assert set(counts.index) == set(CLOSED_SEASONS)
         assert set(counts) == {380}
 
     def test_the_evaluation_window_is_7980_fixtures(self, matches) -> None:
@@ -65,17 +80,26 @@ class TestCoverage:
         ]
         assert len(window) == 7980
 
-    def test_the_lower_tiers_are_full_except_where_covid_curtailed_them(self, matches) -> None:
+    def test_the_season_in_progress_is_present_and_partial(self, matches) -> None:
+        """The live Season is ingested — a Predictor cannot see it otherwise and a Sealed
+        Prediction cannot be joined to a result — and is deliberately not in either Window."""
+        live = matches[(matches["division"] == "E0") & (matches["season"] == LIVE_SEASON)]
+
+        assert 0 < len(live) < 380
+        assert LIVE_SEASON not in EVALUATION_WINDOW
+        assert LIVE_SEASON not in BURN_IN_WINDOW
+
+    def test_the_lower_tiers_are_full_except_where_covid_curtailed_them(self, closed) -> None:
         """League One and League Two stopped early in 2019/20; the Premier League did not."""
-        counts = matches[matches["division"] != "E0"].groupby(["division", "season"]).size()
+        counts = closed[closed["division"] != "E0"].groupby(["division", "season"]).size()
         short = {key: int(n) for key, n in counts.items() if n != 552}
         assert short == {("E2", 2019): 400, ("E3", 2019): 440}
 
-    def test_ingests_roughly_43000_matches_beyond_the_premier_league(self, matches) -> None:
+    def test_ingests_roughly_43000_matches_beyond_the_premier_league(self, closed) -> None:
         """The cost of rating the whole pyramid, as estimated in ADR 0004."""
-        assert 42_000 < len(matches[matches["division"] != "E0"]) < 44_000
+        assert 42_000 < len(closed[closed["division"] != "E0"]) < 44_000
 
-    def test_the_corpus_is_the_size_the_spec_expected(self, matches) -> None:
+    def test_the_closed_corpus_is_the_size_the_spec_expected(self, closed) -> None:
         """Issue 3 expected ~52,900: about 9,880 in E0 and about 43,000 across E1-E3.
 
         The lower tiers come to 42,792 rather than the 43,056 a full 26 x 552 x 3 would give, and
@@ -83,13 +107,13 @@ class TestCoverage:
         2019/20. Worth asserting rather than waving at, because "a few hundred short
         of the estimate" is also what a quietly dropped tier or a truncated Season looks like.
         """
-        e0 = matches[matches["division"] == "E0"]
-        lower = matches[matches["division"] != "E0"]
+        e0 = closed[closed["division"] == "E0"]
+        lower = closed[closed["division"] != "E0"]
 
         assert len(e0) == 9_880
         assert len(lower) == 26 * 552 * 3 - 264
         assert len(lower) == 42_792
-        assert len(matches) == 52_672
+        assert len(closed) == 52_672
 
 
 class TestClubResolution:
@@ -127,10 +151,10 @@ class TestEraBoundaries:
         assert (coverage.loc[2000:2018] == 0).all()
         assert (coverage.loc[2019:2025] == 1).all()
 
-    def test_match_stats_are_present_from_2000_01(self, matches) -> None:
+    def test_match_stats_are_present_from_2000_01(self, closed) -> None:
         """Recorded as 100%; it is 99.98% - nine rows across the whole pyramid lack them."""
         columns = ["home_shots", "away_shots", "home_corners", "away_corners", "home_fouls"]
-        missing = matches[columns].isna().any(axis=1).sum()
+        missing = closed[columns].isna().any(axis=1).sum()
         assert missing == 9
 
     def test_the_market_line_is_never_read_from_two_columns_at_once(self, matches) -> None:

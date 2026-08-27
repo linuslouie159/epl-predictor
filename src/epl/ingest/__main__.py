@@ -20,12 +20,10 @@ from epl.ingest.football_data import (
     FIRST_SEASON,
     LAST_SEASON,
     SOURCE,
+    build_tables,
     club_names_in_raw_cache,
     fetch_all,
-    load_matches,
-    odds_availability,
 )
-from epl.paths import processed_dir
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,17 +73,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "build":
-        matches = load_matches(seasons, divisions)
-        out = args.out or processed_dir() / "matches.csv"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        matches.to_csv(out, index=False)
+        matches, availability, out, record = build_tables(seasons, divisions, args.out)
         print(f"{len(matches)} matches -> {out}")
 
-        # Recorded rather than inferred: once odds are a float column full of nulls, a Season with
-        # no market is indistinguishable from one the market priced at nothing.
-        availability = odds_availability(seasons, divisions)
-        record = out.parent / "odds_availability.csv"
-        availability.to_csv(record, index=False)
         priced = int(availability["has_market_line"].sum()) if not availability.empty else 0
         print(f"odds availability for {len(availability)} Season-tiers -> {record}")
         print(f"  {priced} carry a Market Line, {len(availability) - priced} do not")

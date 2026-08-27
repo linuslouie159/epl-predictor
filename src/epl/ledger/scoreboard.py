@@ -304,9 +304,14 @@ def reliability(
     return pd.concat(diagrams, ignore_index=True)[list(RELIABILITY_REPORT_COLUMNS)]
 
 
-def write(board: pd.DataFrame) -> Path:
-    """Write the scoreboard, and return where it went."""
-    return _publish(board, path())
+def write(board: pd.DataFrame, destination: Path | None = None) -> Path:
+    """Write the scoreboard, and return where it went.
+
+    ``destination`` is for a board over a different span rather than a different metric — the live
+    Season's, which is scored apart from the Evaluation Window so that the headline numbers mean
+    the same thing this week as last (:mod:`epl.windows`). Same columns, same code, another file.
+    """
+    return _publish(board, destination or path())
 
 
 def reliability_path() -> Path:

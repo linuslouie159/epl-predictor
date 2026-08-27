@@ -46,9 +46,11 @@ catches up.
 how far behind the last Fixture played the archive is — and needs only played matches, which is
 what the corpus is. :func:`coverage` looks forwards — are the next round's Fixtures all called
 yet? — and therefore needs Fixtures that have *not* kicked off, which the corpus by definition does
-not hold; those arrive with ``fixtures.csv`` at issue #17. Rolling the two together would mean
-reporting "cannot tell yet" as ``sealable=False``, which is the one answer this finding must not
-give by accident.
+not hold; those come from ``fixtures.csv`` via :mod:`epl.live.upcoming`, built at issue #17 — which
+found the rolling file carrying no Premier League row on either day it was asked, so
+:func:`coverage` is waiting for an input rather than an implementation. Rolling the two
+measurements together would mean reporting "cannot tell yet" as ``sealable=False``, which is the
+one answer this finding must not give by accident.
 
 Two things separate a live page from the nine frozen ones, and both are facts:
 
@@ -144,9 +146,10 @@ class Coverage:
 
     Forward-looking, and therefore **not answerable from the corpus alone**: it needs the Fixtures
     of a round that has not kicked off, and the corpus is a table of played matches. Those come
-    from ``fixtures.csv`` at issue #17, the same gap ``epl.simulate.checkpoints.slate_at`` names.
-    So this is the question the live loop will ask, and :class:`Lag` is the one that can be asked
-    today. Keeping them apart is what stops "cannot tell yet" from being reported as "no".
+    from ``fixtures.csv`` through :func:`epl.live.upcoming.to_predict` (issue #17), the same gap
+    ``epl.simulate.checkpoints.slate_at`` names. So this is the question the live loop asks, and
+    :class:`Lag` is the one the corpus can answer. Keeping them apart is what stops "cannot tell
+    yet" from being reported as "no".
     """
 
     season: int
@@ -265,7 +268,7 @@ def coverage(
     ``fixtures`` must include the Fixtures of a round that has **not** kicked off, so the corpus
     alone will not do for a Season in progress — see :class:`Coverage`. Where they come from is
     otherwise not this function's business: the corpus supplies them when the measurement is taken
-    over a completed Season, and issue #17's ``fixtures.csv`` will supply them live. The same
+    over a completed Season, and :func:`epl.live.upcoming.to_predict` supplies them live. The same
     ignorance :mod:`epl.simulate.table` has about posteriors.
     """
     kickoffs = _dates(fixtures)
@@ -274,7 +277,8 @@ def coverage(
         raise LiveError(
             f"no Fixture in the frame kicks off on or after {as_of}, so there is no next "
             "Prediction Round to ask about. A corpus of played matches always looks like this "
-            "for a Season in progress; the upcoming Fixtures come from fixtures.csv at issue #17"
+            "for a Season in progress; the upcoming Fixtures come from fixtures.csv, through "
+            "epl.live.upcoming"
         )
 
     anchors = kickoffs.loc[upcoming.index].map(anchor)

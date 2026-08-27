@@ -149,8 +149,8 @@ def _live(matches_path: Path | None, season: int | None) -> int:
     if not (matches["season"] == page.season).any():
         print(
             f"\nthe corpus holds no {season_label(page.season)} Fixtures, so these calls cannot "
-            "be reconciled yet.\ningesting the Season in progress moves epl.windows.LAST_SEASON "
-            "and belongs to issue #17."
+            "be reconciled yet.\nMove epl.windows.LAST_SEASON and re-run `python -m epl.ingest "
+            "fetch` to put a Season in progress into the corpus."
         )
         return 0
 

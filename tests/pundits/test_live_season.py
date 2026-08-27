@@ -211,15 +211,15 @@ class TestCoverageOfTheNextRound:
     ) -> None:
         """**This is the live case, not an edge case.** The corpus holds played matches, so for a
         Season in progress there is never an upcoming Fixture in it — the next round's come from
-        ``fixtures.csv`` at issue #17. Refusing beats returning ``sealable=False``, which would
-        report "cannot tell yet" as "no"."""
+        ``fixtures.csv``, through :mod:`epl.live.upcoming`. Refusing beats returning
+        ``sealable=False``, which would report "cannot tell yet" as "no"."""
         fixtures = make_matches(
             {"season": 2026, "date": "2026-08-21", "home_club": "arsenal",
              "away_club": "coventry"},
         )
         calls = make_calls({"pundit": "sutton", "season": 2026, "date": day("2026-08-21")})
 
-        with pytest.raises(live.LiveError, match=r"fixtures\.csv at issue #17"):
+        with pytest.raises(live.LiveError, match=r"come from fixtures\.csv, through"):
             live.coverage(calls, fixtures, as_of=day("2026-09-01"))
 
     def test_the_next_kickoff_is_a_date_even_when_the_caller_held_strings(

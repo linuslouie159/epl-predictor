@@ -87,7 +87,7 @@ def _require_cache() -> None:
         if not raw_season_path(season, division).exists()
     ]
     if missing:
-        pytest.skip(f"raw cache incomplete ({len(missing)} of 104 files missing)")
+        pytest.skip(f"raw cache incomplete ({len(missing)} files missing)")
 
 
 @pytest.fixture(scope="module")

@@ -132,7 +132,11 @@ class LedgerError(Exception):
 
 
 def predictions_for(
-    predictor: Predictor, fixtures: pd.DataFrame, evidence: Evidence
+    predictor: Predictor,
+    fixtures: pd.DataFrame,
+    evidence: Evidence,
+    *,
+    as_of: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
     """One Prediction Round's Predictions from one Predictor, as ledger rows.
 
@@ -144,6 +148,18 @@ def predictions_for(
 
     The Predictor is handed a *Fixture* — :data:`VISIBLE_FIXTURE_COLUMNS` of the row, and no more.
     The corpus is a table of played matches, so the rest of the row is the answer sheet.
+
+    ``as_of`` overrides the instant derived from the Fixtures, and exists for exactly one caller:
+    a **superseding** Prediction, which ADR 0005 says is the only way to correct a sealed round.
+    Such a Prediction is made later than the round it corrects, so it is stamped later — and its
+    Evidence is cut at the later instant too, which means it may genuinely know more than the
+    Prediction it replaces. That is a fact about it rather than a flaw, and stamping it at the
+    round's original midnight to keep the comparison tidy would be the fiction the sealed store
+    exists to prevent. It may never move *earlier* than the round's own instant, which would be a
+    claim to have predicted before the odds were sampled.
+
+    ``prediction_round`` is derived from the kickoff either way, because a round is a property of
+    the Fixture and not of when somebody got around to predicting it.
     """
     _require_columns(fixtures)
     kickoff = kickoff_instants(fixtures)
@@ -156,10 +172,22 @@ def predictions_for(
             f"{instants.nunique()} As-Of Instants in one call; Fixtures must be one Prediction "
             "Round predicted as one batch (ADR 0002)"
         )
-    as_of = pd.Timestamp(instants.iloc[0]) if len(instants) else None
-    if as_of is not None and pd.Timestamp(evidence.as_of) != as_of:
+    anchored = pd.Timestamp(instants.iloc[0]) if len(instants) else None
+    if as_of is None:
+        stamped = anchored
+    else:
+        stamped = pd.Timestamp(as_of)
+        if anchored is not None and stamped < anchored:
+            raise LedgerError(
+                f"a Prediction cannot be stamped at {stamped}, before its own round's As-Of "
+                f"Instant of {anchored}. Superseding moves the instant forward, never back "
+                "(ADR 0005)"
+            )
+        instants = pd.Series(stamped, index=fixtures.index, dtype="datetime64[ns]")
+
+    if stamped is not None and pd.Timestamp(evidence.as_of) != stamped:
         raise LedgerError(
-            f"Evidence was cut at {evidence.as_of}, but this round's As-Of Instant is {as_of}"
+            f"Evidence was cut at {evidence.as_of}, but this round's As-Of Instant is {stamped}"
         )
 
     probabilities = metrics.as_predictions(

@@ -21,6 +21,7 @@ MODULES = (
     "epl.pundits",
     "epl.simulate",
     "epl.ledger",
+    "epl.live",
 )
 
 #: Single-file modules that every stage imports rather than a stage of their own: three scope which

@@ -25,7 +25,7 @@ from epl.benchmarks import CEILING_LINE, MARKET_LINE, vig
 from epl.benchmarks.market import overround_report
 from epl.ingest import DIVISIONS, FIRST_SEASON, LAST_SEASON, load_matches, raw_season_path
 from epl.ledger import backtest, scoreboard
-from epl.windows import EVALUATION_WINDOW
+from epl.windows import EVALUATION_WINDOW, LIVE_SEASON
 
 pytestmark = pytest.mark.cache
 
@@ -51,7 +51,7 @@ def _require_cache() -> None:
         if not raw_season_path(season, division).exists()
     ]
     if missing:
-        pytest.skip(f"raw cache incomplete ({len(missing)} of 104 files missing)")
+        pytest.skip(f"raw cache incomplete ({len(missing)} files missing)")
 
 
 @pytest.fixture(scope="module")
@@ -123,13 +123,16 @@ class TestTheOverroundIsReported:
         assert (MARKET_LINE.overround(scored) >= 1.0).all()
 
     def test_the_report_covers_every_priced_season_and_tier(self, matches: pd.DataFrame) -> None:
+        """Every Evaluation Window Season, and the Season in progress — which matters more than it
+        looks: a live Fixture with no book is a live Fixture the Market Line cannot be sealed on."""
         report = overround_report(matches)
         premier = report.loc[
             (report["predictor"] == "market_line") & (report["division"] == "E0")
         ]
+        scored = premier.loc[premier["season"].isin(list(EVALUATION_WINDOW))]
 
-        assert list(premier["season"]) == list(EVALUATION_WINDOW)
-        assert int(premier["fixtures"].sum()) == EXPECTED_FIXTURES
+        assert list(premier["season"]) == [*EVALUATION_WINDOW, LIVE_SEASON]
+        assert int(scored["fixtures"].sum()) == EXPECTED_FIXTURES
 
     def test_the_margin_has_narrowed_over_the_window(self, matches: pd.DataFrame) -> None:
         """9.4% in 2005/06 against about 4.1% in the early 2020s. A fact about the market that no
@@ -221,7 +224,7 @@ class TestTheCeilingLineOverTheCorpus:
         return window.loc[CEILING_LINE.covers(window)].reset_index(drop=True)
 
     def test_it_covers_2019_20_onward_and_nothing_earlier(self, closing: pd.DataFrame) -> None:
-        assert set(closing["season"]) == set(range(FIRST_CLOSING_SEASON, LAST_SEASON + 1))
+        assert set(closing["season"]) == set(range(FIRST_CLOSING_SEASON, LIVE_SEASON))
         assert len(closing) == 2660
 
     def test_it_beats_the_market_line_on_the_fixtures_they_share(

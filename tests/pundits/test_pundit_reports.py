@@ -197,7 +197,7 @@ class TestLive:
         make_matches: Callable[..., pd.DataFrame],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """The live Season is ahead of the corpus until issue #17 moves ``LAST_SEASON``, and a
+        """A Season page can be published before the corpus has been re-ingested for it, and a
         command that crashed on that would be reporting a bug rather than a state."""
         processed_dir().mkdir(parents=True, exist_ok=True)
         make_matches({"season": PAGE.season - 1}).to_csv(
@@ -206,4 +206,4 @@ class TestLive:
 
         assert cli.main(["live"]) == 0
 
-        assert "belongs to issue #17" in capsys.readouterr().out
+        assert "Move epl.windows.LAST_SEASON" in capsys.readouterr().out

@@ -68,7 +68,7 @@ Hyperparameters are tuned only on the Burn-In Window (2000/01–2004/05) and fro
 | Source | Use | Coverage |
 |---|---|---|
 | Football-Data.co.uk `E0`–`E3` | results, match stats, odds | 2000/01– , four tiers |
-| Football-Data.co.uk `fixtures.csv` | upcoming Fixtures + Market Line | rolling ~1 week |
+| Football-Data.co.uk `fixtures.csv` | upcoming Fixtures + Market Line | rolling; **no E0 row seen yet** |
 | MyFootballFacts | Pundit backfill (Lawrenson, Sutton) | 2017/18–2025/26, 3,408 rows, frozen |
 | MyFootballFacts | Pundit calls for the Season in progress | ~a round behind the football |
 | ~~BBC Sport~~ | ~~live Pundit predictions~~ | **not used — see below** |
@@ -97,7 +97,7 @@ market-average pre-match (`BbAv*`) from 2005/06 spliced to `Avg*` from 2019/20, 
 5. **Pundits** — backfill, grading, Calibrated Pundit, three-way scoreboard
 6. **Dixon-Coles** — Scoreline probabilities, MLE per Prediction Round
 7. **Season Projection** — Bayesian posterior → Monte Carlo → title / top-4 / relegation
-8. **Live loop** — seal each Prediction Round before kickoff
+8. **Live loop** — seal each Prediction Round before kickoff, and score it after
 9. **Frontend** — reads `outputs/` only; no modelling logic
 
 Stages 5 and 7 were moved: the Season Projection needs goal difference (24 of 26 Seasons had points
@@ -111,8 +111,9 @@ top of it. The tracker's `Blocked by` fields are authoritative where the two dis
 ## Deferred to v2
 
 XGBoost / ML layer, the Golden Boot player model, and the API-Football client. Each gets a written
-stub explaining what it would do and what it needs. API-Football is unnecessary in v1 because
-`fixtures.csv` already carries upcoming Fixtures with the Market Line, free and unauthenticated.
+stub explaining what it would do and what it needs. API-Football was deferred because `fixtures.csv`
+already carries upcoming Fixtures with the Market Line, free and unauthenticated — a premise stage 13
+measured and could not confirm. See [The live loop](#the-input-is-the-part-that-is-not-proven).
 
 ## Layout
 
@@ -150,11 +151,20 @@ src/epl/simulate/validation.py    where the real champion landed, across complet
 outputs/projection.csv  one Season Projection: title, Europe, relegation; regenerable, gitignored
 outputs/projection_validation.csv  every projection against what happened; regenerable, gitignored
 src/epl/ledger/         Prediction stores, the row audit, the scoreboard
+src/epl/ledger/live.py  the sealed store: the window, the revisions, and the seal audit
 outputs/backtest/       regenerable, gitignored — one file per Predictor
 outputs/live/           SEALED, committed, append-only — one file per Prediction Round
 outputs/scoreboard.csv  every Predictor over the Evaluation Window; regenerable, gitignored
 outputs/reliability.csv 10-bin diagrams per Predictor, raw and calibrated; regenerable, gitignored
+src/epl/live/           the live loop: the upcoming round, the seal, the retrospective score
+src/epl/live/upcoming.py   the rolling fixtures file -> the one round that can be sealed now
+src/epl/live/seal.py       every registered Predictor over that round, sealed and committed
+outputs/live_scoreboard.csv  the Season in progress, scored on its own board; gitignored
 ```
+
+Three modules are called `live` and they are different things: `epl.ledger.live` is the sealed
+*store*, `epl.pundits.live` is stage 12's spike into the Pundit archive, and `epl.live` is the loop
+that uses both.
 
 `calibration.py` sits beside the contract it wraps rather than inside `models/`, because it is not a
 model: it takes Predictions and returns Predictions, and it treats the Market Line and a Pundit
@@ -179,13 +189,19 @@ which conda selects MKL 2026 and every LAPACK call aborts the interpreter — ta
 ## Running the ingest
 
 ```
-python -m epl.ingest fetch              # fill data/raw/ — 104 files, 26 Seasons x 4 tiers, ~16 MB
+python -m epl.ingest fetch              # fill data/raw/ — 108 files, 27 Seasons x 4 tiers, ~16 MB
 python -m epl.ingest fetch --refresh    # re-download, including the growing current Season
-python -m epl.ingest build              # write matches.csv (52,672) + odds_availability.csv
+python -m epl.ingest build              # write matches.csv (52,672 closed) + odds_availability.csv
 python -m epl.ingest fixtures           # fetch the rolling forward-Fixture file + Market Line
 python -m epl.ingest clubs              # audit: Club spellings the Alias table does not know
 python -m epl.clubs.build               # rebuild clubs.csv, aliases.csv, teamname_replacements.json
 ```
+
+The 27th Season is the one being played. It is ingested from stage 13 because the live loop cannot
+predict it otherwise and cannot score what it sealed — and it is in **neither Window**: never fitted
+on, never backfilled, scored on its own board. `matches.csv` therefore grows every Saturday, which is
+why every fixed count in the corpus tests is over the 26 closed Seasons and the Season in progress is
+checked for being partial instead.
 
 `clubs` exits non-zero on an unknown spelling. That is deliberate — a Club whose name fails to map
 would have its rating history split in two at the point the spelling changed, and pyramid-wide Elo
@@ -257,6 +273,16 @@ the ingested corpus rather than trusting them, and skip when `data/raw/` is abse
 nine cached Pundit pages, which `python -m epl.pundits fetch` puts there. Tests marked `network`
 check that upstream still serves the shapes the live loop assumes.
 
+Every fixed count in a `cache` test is over the **26 closed Seasons**. The corpus also holds the
+Season in progress, which grows every Saturday, so a count including it would be a test that failed
+weekly and told nobody anything; that Season is checked for being present and partial instead.
+
+`tests/live/test_live_loop_over_the_corpus.py` is the one that cannot be done with two invented
+Clubs: it registers all nine Predictors against the real corpus and pins which four can speak to a
+Fixture nobody has played. Its Fixtures are hand-built, and the file says so — Football-Data's rolling
+file has never been seen carrying a Premier League row, so a real upcoming round is exactly what
+cannot be obtained. Nothing it asserts depends on who is playing whom.
+
 ## Predictions, the ledger and the scoreboard
 
 A **Predictor** is anything with a name and a `predict`. It is handed one Prediction Round's
@@ -302,6 +328,80 @@ The Naive Baseline is the floor, and it is fitted walk-forward: at each round it
 Outcomes its Evidence holds. It scores **0.22938 RPS** over the Evaluation Window's 7,980 Fixtures.
 The published 0.2292 is the whole-window figure, computed from rates that already know how the
 window turned out; the 0.0002 difference is the leak being refused, not a bug.
+
+## The live loop
+
+Everything above looks backwards. The live loop produces the other kind of record: a **Sealed
+Prediction**, written before its Fixture kicked off and committed, so that git history — not a
+timestamp inside a file, which anyone could type — is the proof of when it existed.
+
+```
+python -m epl.live upcoming  # what the rolling fixtures file holds, and what could be sealed
+python -m epl.live seal      # predict the upcoming round, write it to outputs/live/, commit it
+python -m epl.live score     # ingest results, then score what has been sealed
+```
+
+**A round may be sealed only inside its own window**: at or after its As-Of Instant, and strictly
+before its first kickoff. Both ends are refusals rather than warnings. Sealing early claims a moment
+that has not happened; sealing late is a claim about what the code would have said, which is the one
+thing this store must never hold.
+
+**Five of the nine registered Predictors say nothing, and nothing in the loop knows which five.**
+Two Pundits have published no call the frozen dataset holds, two Calibrated Pundits have no call to
+read, and the Ceiling Line has no closing odds because the match has not closed. Each answers
+`covers` with nothing, exactly as it does for a Season it never covered, and the run *records* which
+Predictors were silent rather than being told in advance. Elo, Dixon-Coles, the Market Line and the
+Naive Baseline are what get sealed.
+
+**A sealed round is corrected by superseding it, never by rewriting it.** `seal --supersede` writes
+a new revision of the round's file — `2026-08-28.csv`, then `2026-08-28.1.csv` — at a new As-Of
+Instant, and every superseding row must be stamped strictly later than the row it replaces. Such a
+Prediction may genuinely know more than the one it replaces, because it was genuinely made later;
+stamping it at the round's original midnight to keep the comparison tidy is the fiction
+[ADR 0005](./docs/adr/0005-split-prediction-ledger.md) exists to prevent. Running the loop twice in
+one round is a no-op, which is what lets it be put on a schedule.
+
+**The Live Season is scored on its own board.** It is ingested — a Predictor cannot see it
+otherwise, and a sealed Prediction cannot be joined to a result — but it is never backfilled and
+never folded into the Evaluation Window. `outputs/scoreboard.csv` therefore says what it said last
+week; `outputs/live_scoreboard.csv` is where the live record accumulates. `score` refreshes the Live
+Season from upstream and rebuilds the match table itself, so scoring a played round is one command
+and not three.
+
+**The loop is schedulable and is deliberately not scheduled.** Both write commands are idempotent
+inside a round, which is what a cron entry or a workflow needs. None is committed here, for two
+reasons: there is nothing to seal yet (see below), and a schedule that fetches upstream and pushes
+commits to this repository is a decision for whoever owns it rather than a default.
+
+### The input is the part that is not proven
+
+The loop is built and tested end to end. What it reads is not. Football-Data's rolling
+`fixtures.csv` is the only confirmed source of upcoming Premier League Fixtures with a Market Line,
+and **on every fetch so far it has held none**:
+
+| Fetched | Upstream `Last-Modified` | Rows | E0 rows |
+|---|---|---|---|
+| 2026-08-21 06:33 UTC — 2026/27 round 1 kicked off that evening | not recorded | 3 | **0** |
+| 2026-08-27 06:12 UTC — the day before round 2 | Tue 25 Aug 09:59 GMT | 5 | **0** |
+
+Both times the file held only Fixtures dated on or before the day it was generated — one League One
+tie and two Spanish on the first, one National League tie and four Spanish on the second — and the
+second was already two days stale. So the file is regenerated irregularly and its forward horizon at
+generation time is a couple of days, which is shorter than a Prediction Round's own window.
+
+The first fetch's `E2` row is worth noticing: this is not a file that omits English football. It has
+carried an English tier this project ingests. It has never been seen carrying the one tier this
+project predicts.
+
+This is issue #17's open risk 2, and it is **documented rather than closed**. Two fetches are not
+proof that a Premier League row never appears; they are proof that one has not been seen yet, and
+that nothing in this project should assume one will. `python -m epl.live upcoming` is what answers the
+question on any given day, and it answers it without writing anything.
+
+The consequence reaches [Deferred to v2](#deferred-to-v2): the reason given for not needing an
+API-Football client is that "`fixtures.csv` already carries upcoming Fixtures with the Market Line".
+That premise is exactly what is in doubt, and issue #18's stub records the measurement rather than
+the assumption.
 
 ## The market benchmarks
 

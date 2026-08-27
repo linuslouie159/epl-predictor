@@ -41,13 +41,24 @@ class TestWindows:
     def test_the_windows_are_contiguous(self) -> None:
         assert max(windows.BURN_IN_WINDOW) + 1 == min(windows.EVALUATION_WINDOW)
 
-    def test_they_span_exactly_the_ingested_seasons(self) -> None:
+    def test_they_span_every_ingested_season_except_the_one_being_played(self) -> None:
+        """The two Windows are the *closed* Seasons. The Season in progress is a third span, and
+        is in neither (ADR 0010): never fitted on, never backfilled, scored on its own board."""
         spanned = list(windows.BURN_IN_WINDOW) + list(windows.EVALUATION_WINDOW)
-        assert spanned == list(range(windows.FIRST_SEASON, windows.LAST_SEASON + 1))
 
-    def test_26_seasons_are_ingested(self) -> None:
-        """26 ingested, 21 scored — deliberate, and the thing readers assume is a bug (ADR 0008)."""
-        assert len(range(windows.FIRST_SEASON, windows.LAST_SEASON + 1)) == 26
+        assert spanned == list(range(windows.FIRST_SEASON, windows.LIVE_SEASON))
+        assert windows.LIVE_SEASON not in spanned
+
+    def test_27_seasons_are_ingested_and_21_are_scored(self) -> None:
+        """26 closed plus the one being played, 21 scored — deliberate, and the thing readers
+        assume is a bug (ADR 0008, ADR 0010)."""
+        assert len(range(windows.FIRST_SEASON, windows.LAST_SEASON + 1)) == 27
+        assert len(windows.EVALUATION_WINDOW) == 21
+
+    def test_the_live_season_is_the_last_one_ingested(self) -> None:
+        """Defined as `LAST_SEASON` rather than as a second literal, so there is one place to move
+        at the start of a campaign and no way for the two to disagree."""
+        assert windows.LIVE_SEASON == windows.LAST_SEASON
 
 
 class TestClassification:

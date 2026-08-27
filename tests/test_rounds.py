@@ -306,7 +306,12 @@ class TestRoundsIgnoreAnyUpstreamGameweek:
 
 @pytest.mark.cache
 class TestTheWholePremierLeagueCorpus:
-    """Ticket 5 over every E0 Fixture from 2000/01 to 2025/26.
+    """Ticket 5 over every E0 Fixture of the two Windows — 2000/01 to 2025/26.
+
+    Deliberately not the whole corpus, which from stage 13 also holds the Season being played
+    (ADR 0010). That Season grows every Saturday, so a count including it would be a test that
+    failed weekly and told nobody anything; it is checked for shape in
+    :class:`TestTheSeasonInProgress` instead.
 
     Needs a populated ``data/raw/``, which is gitignored, so these skip when it is absent:
 
@@ -406,10 +411,46 @@ class TestTheWholePremierLeagueCorpus:
         assert not (assigned["time"] == "00:00").any()
 
 
+@pytest.mark.cache
+class TestTheSeasonInProgress:
+    """The anchor rule over the Season being played, which is what the live loop seals from.
+
+    Checked for shape rather than for size — the Season grows every Saturday, and a Fixture count
+    here would be a weekly failure. What must hold is that a Season in progress is not a special
+    case: the same rule anchors it, and the same strictness holds.
+    """
+
+    def test_every_fixture_played_so_far_carries_a_round(self, live_e0: pd.DataFrame) -> None:
+        assigned = rounds.assign_rounds(live_e0)
+
+        assert len(assigned) > 0
+        assert assigned["prediction_round"].notna().all()
+
+    def test_it_is_a_partial_season(self, live_e0: pd.DataFrame) -> None:
+        assert 0 < len(live_e0) < 380
+
+    def test_every_fixture_kicks_off_strictly_after_its_own_as_of_instant(
+        self, live_e0: pd.DataFrame
+    ) -> None:
+        """Football-Data has recorded a kickoff time since 2019/20, so the exact form of the check
+        applies to every Fixture of a live Season — no 437-style carve-out."""
+        assigned = rounds.assign_rounds(live_e0)
+
+        assert assigned["time"].notna().all()
+        assert (rounds.kickoff_instants(assigned) > assigned["as_of_instant"]).all()
+
+
 @pytest.fixture(scope="module")
 def e0() -> pd.DataFrame:
-    """Every Premier League Fixture across the two Windows, from the raw cache."""
+    """Every Premier League Fixture across the two Windows, from the raw cache.
+
+    The two Windows, not the whole corpus: the Season in progress is in neither (ADR 0010) and grows
+    every Saturday, so the counts in :class:`TestTheWholePremierLeagueCorpus` are over the closed
+    Seasons and stay put. :func:`live_e0` is the Season in progress, checked for shape rather than
+    for size.
+    """
     from epl.ingest import DIVISIONS, FIRST_SEASON, LAST_SEASON, load_matches, raw_season_path
+    from epl.windows import LIVE_SEASON
 
     missing = [
         season
@@ -420,7 +461,20 @@ def e0() -> pd.DataFrame:
         pytest.skip(f"raw cache incomplete ({len(missing)} E0 Seasons missing)")
 
     matches = load_matches(divisions=(DIVISIONS[0],))
-    return matches[matches["season"].between(FIRST_SEASON, LAST_SEASON)].reset_index(drop=True)
+    return matches[matches["season"] < LIVE_SEASON].reset_index(drop=True)
+
+
+@pytest.fixture(scope="module")
+def live_e0() -> pd.DataFrame:
+    """The Season in progress, which the anchor rule has to handle as readily as a closed one."""
+    from epl.ingest import DIVISIONS, load_matches, raw_season_path
+    from epl.windows import LIVE_SEASON
+
+    if not raw_season_path(LIVE_SEASON, DIVISIONS[0]).exists():
+        pytest.skip("raw cache holds no Season in progress")
+
+    matches = load_matches(seasons=(LIVE_SEASON,), divisions=(DIVISIONS[0],))
+    return matches.reset_index(drop=True)
 
 
 @pytest.fixture(scope="module")

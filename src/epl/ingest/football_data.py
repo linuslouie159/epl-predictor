@@ -494,6 +494,34 @@ def _parse_season_dates(values: pd.Series, season: int, path: Path | str) -> pd.
     return parsed.dt.date
 
 
+def build_tables(
+    seasons: range | list[int] | None = None,
+    divisions: tuple[str, ...] = DIVISIONS,
+    out: Path | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, Path, Path]:
+    """Write ``matches.csv`` and ``odds_availability.csv`` from the raw cache, and hand both back.
+
+    The two are written together and never apart. Odds availability is *recorded* rather than
+    inferred, because once odds are a float column full of nulls a Season with no market is
+    indistinguishable from one the market priced at nothing — so a match table on disk beside a
+    stale availability record is worse than either alone.
+
+    Here rather than in ``epl.ingest.__main__`` because two entry points now rebuild the corpus:
+    ``python -m epl.ingest build``, and ``python -m epl.live score``, which refreshes the Live
+    Season before scoring what was sealed on it. A command line is not a library, and the second
+    caller reaching through the first one's argparse would pin it to that CLI's flag spelling.
+    """
+    matches = load_matches(seasons, divisions)
+    destination = out or processed_dir() / "matches.csv"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    matches.to_csv(destination, index=False)
+
+    availability = odds_availability(seasons, divisions)
+    record = destination.parent / "odds_availability.csv"
+    availability.to_csv(record, index=False)
+    return matches, availability, destination, record
+
+
 def match_table(path: Path | None = None) -> pd.DataFrame:
     """The cleaned match table `python -m epl.ingest build` writes, or how to make one.
 

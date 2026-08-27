@@ -4,7 +4,8 @@
 three and four Clubs, which is the right place for "goal difference comes before the head-to-head
 record". Three things cannot be said there at all:
 
-* what the tiebreaker chain is *for*. Over the 26 real Seasons in the corpus, 24 had at least one
+* what the tiebreaker chain is *for*. Over the 26 *closed* Seasons in the corpus — the Season being
+  played is partial and is left out of every count here — 24 had at least one
   pair of Clubs level on points and 85 pairs in all — and **not one pair in 26 years was still
   level after goals scored**. The two head-to-head steps and the coin flip beneath them have never
   been needed by a real Premier League table. They exist for the simulated ones, and the only
@@ -43,7 +44,7 @@ from epl.simulate.posterior import fit as fit_posterior
 from epl.simulate.projection import SIMULATION, Simulation, simulate, slate_at
 from epl.simulate.table import Slate
 from epl.simulate.validation import final_positions
-from epl.windows import FIRST_SEASON, LAST_SEASON
+from epl.windows import FIRST_SEASON, LIVE_SEASON
 
 pytestmark = pytest.mark.cache
 
@@ -102,7 +103,7 @@ class TestWhatTheChainIsFor:
         rng = np.random.default_rng(0)
         deep = sum(
             _finished(matches, season).finish(None, rng).level_pairs
-            for season in range(FIRST_SEASON, LAST_SEASON)
+            for season in range(FIRST_SEASON, LIVE_SEASON)
         )
 
         assert deep == 0
@@ -192,7 +193,7 @@ def _finished(matches: pd.DataFrame, season: int) -> Slate:
 def _points_ties(matches: pd.DataFrame) -> tuple[int, int, int]:
     """(Seasons, Seasons with at least one pair level on points, pairs in all)."""
     seasons = with_a_tie = pairs = 0
-    for season in range(FIRST_SEASON, LAST_SEASON + 1):
+    for season in range(FIRST_SEASON, LIVE_SEASON):
         within = matches.loc[(matches["division"] == "E0") & (matches["season"] == season)]
         if within.empty:
             continue

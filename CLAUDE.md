@@ -7,7 +7,7 @@ and an honest three-way scoreboard against the betting market and public pundits
 
 1. [CONTEXT.md](./CONTEXT.md) — the glossary. Use these exact terms in code and in conversation.
 2. [docs/DECISIONS.md](./docs/DECISIONS.md) — every decision, the measured evidence behind it, and the open risks.
-3. [docs/adr/](./docs/adr/) — nine ADRs explaining the choices that look wrong until you know why.
+3. [docs/adr/](./docs/adr/) — ten ADRs explaining the choices that look wrong until you know why.
 4. [README.md](./README.md) — target numbers, data sources, build order, layout.
 
 ## The rule that outranks everything
@@ -24,6 +24,7 @@ Do not "fix" these without reading the linked ADR first:
 - **The benchmark is pre-match odds, not closing odds**, against convention. [ADR 0001](./docs/adr/0001-pre-match-odds-as-market-benchmark.md)
 - **The model predicts weekly in batches** instead of per-fixture, deliberately using less information. [ADR 0002](./docs/adr/0002-weekly-prediction-rounds.md)
 - **26 seasons are ingested but only 21 are scored.** [ADR 0008](./docs/adr/0008-burn-in-prefix-frozen-hyperparameters.md)
+- **27 seasons are ingested and the 27th is in neither Window.** [ADR 0010](./docs/adr/0010-live-season-outside-both-windows.md)
 - **Dixon-Coles is fitted two different ways** — MLE and Bayesian. [ADR 0007](./docs/adr/0007-mle-for-matches-bayesian-for-projections.md)
 - **Dixon-Coles' likelihood lives apart from its fit**, in `epl.models.likelihood`, which knows
   nothing about optimisers, Evidence or Predictors. That is ADR 0007's "both paths share one
@@ -135,6 +136,28 @@ Do not "fix" these without reading the linked ADR first:
   `predictions`**, and both are binned by the same `epl.metrics.diagram`. The shared middle is what
   makes 0.008 and 0.006 comparable; the different column name is what stops a Club-projection being
   read as a Prediction. Neither half is an accident.
+- **The corpus holds 27 Seasons and the Evaluation Window is still 21.** `epl.windows.LAST_SEASON`
+  is 2026 and `EVALUATION_WINDOW` is `range(2005, 2026)`; they are deliberately not the same edge.
+  The Season in progress is `LIVE_SEASON`, ingested so a Predictor can see it and a Sealed Prediction
+  can be joined to a result, and in **neither Window**: never fitted on, never backfilled, scored on
+  its own board at `outputs/live_scoreboard.csv`. Folding it into the Evaluation Window would make
+  the headline RPS grow every Saturday *and* would have `backfill` regenerate Predictions the live
+  loop had sealed — ADR 0005's exact failure. `matches.csv` therefore grows weekly, which is why
+  every fixed count in the corpus tests is over the 26 closed Seasons.
+- **`epl.live.seal` has no branch per Predictor, and five of the nine say nothing.** `lawrenson`,
+  `sutton`, `margin_map_*` and `ceiling_line` all answer `schema.covered` with nothing for an
+  unplayed Fixture, for their own reasons, so stage 12's "a Pundit cannot be sealed" reaches the
+  live loop as zero lines of code. `tests/live/test_live_loop_over_the_corpus.py` pins which four
+  speak. Do not add a list of sealable Predictors.
+- **A superseding Sealed Prediction is stamped later than the one it replaces, and its Evidence is
+  cut later too**, so it may genuinely know more. That is uncomfortable next to ADR 0002 and it is
+  right: stamping a correction at the round's original midnight would be a false claim about when it
+  was made, in the one store whose whole value is that such claims are true. `seal --supersede`
+  writes `2026-08-28.1.csv` beside `2026-08-28.csv` and refuses any row stamped at or before what
+  the store already holds. It is for correcting a bug, never for refreshing a quote.
+- **`epl.live.__main__.clock` is a function and not a `--now` flag**, on purpose. That value decides
+  whether a round is inside its sealing window, so an operator who could name it could seal a round
+  after its own kickoff and have the file say otherwise.
 - **Refreshing a cached raw file archives the old bytes** into `superseded/` instead of replacing
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
   Both are explained where they live — `src/epl/ingest/cache.py`, which both the Football-Data
@@ -158,8 +181,9 @@ Do not "fix" these without reading the linked ADR first:
 ## Never do this
 
 - Never edit anything under `data/raw/` — it is a byte-identical cache of upstream files.
-- Never rewrite a file under `outputs/live/` after its round's first kickoff. Supersede with a new
-  As-Of Instant instead. That directory is evidence, not output.
+- Never rewrite a file under `outputs/live/`. Supersede it — `python -m epl.live seal --supersede`
+  writes a new revision at a new As-Of Instant. That directory is evidence, not output.
+- Never put the Live Season in the Evaluation Window, and never backfill it. It is sealed only.
 - Never tune a hyperparameter using data from outside the Burn-In Window (2000/01–2004/05).
 - Never report accuracy as the headline metric. RPS is primary; accuracy is for lay explanation only.
 
@@ -297,6 +321,44 @@ Seven things about stage 12 worth knowing before building on it:
 - **Open risk 2 half closed on the same day.** `mmz4281/2627/E0.csv` now exists and parses — 10
   rows, with `Avg*` odds. `fixtures.csv` still holds **no E0 rows**: five rows, one National League
   and four Spanish, one day before a Premier League round. Upcoming Fixtures are what #17 needs.
+
+**Stage 13 is built**: the live loop (`src/epl/live/`, issue #17) — the rolling fixtures file turned
+into the one Prediction Round that can be sealed right now (`upcoming.py`), every registered
+Predictor run over it and the result sealed and committed (`seal.py`), and the Season in progress
+scored retrospectively on its own board. `python -m epl.live upcoming | seal | score`.
+
+**Ingesting 2026/27 changed nothing that is scored, and it was checked.** With the Season in progress
+in the corpus (82 matches across four tiers, 10 of them Premier League), `python -m epl.ledger
+backfill` rewrites all nine files **byte for byte identically** and the scoreboard above is
+unchanged. The reason is the calendar — May to August, so no scored round's As-Of Instant reaches the
+new Season — which is why the separation is free today and no reason to rely on it. The guard is
+`EVALUATION_WINDOW` staying at `range(2005, 2026)`.
+
+**The code is built and tested end to end; its input is not proven.** Open risk 2 is **documented
+rather than closed**, and this is the thing to know before planning anything live:
+
+- **`fixtures.csv` has never been seen carrying a Premier League row.** Two fetches — 21 Aug 2026
+  (the evening round one kicked off) and 27 Aug 2026 (the day before round two) — held 3 and 5 rows
+  and **no E0**. The second was two days stale: `Last-Modified` was Tue 25 Aug 09:59 GMT, and even
+  that batch, generated three days before a Premier League round, carried none. Its forward horizon
+  at generation is about two days, which is shorter than a Prediction Round's own window.
+- **It is not that the file omits English football.** The first fetch carried an `E2` tie. It has
+  simply never been seen carrying the one tier this project predicts. Two fetches cannot prove a
+  negative, which is why this is measured rather than closed — `python -m epl.live upcoming` asks the
+  question on any given day and writes nothing.
+- **This puts issue #18's premise in doubt.** API-Football was deferred *because* "`fixtures.csv`
+  already carries upcoming Fixtures with the Market Line". The stub should record the measurement,
+  not the assumption.
+- **The live Season Projection is blocked on the same input, and was not built.** A projection
+  simulates every *remaining* Fixture of the campaign and `slate_at` says those must come from
+  `fixtures.csv`; a two-day horizon cannot supply the rest of a season. Worth an issue.
+- **The Pundit column on the live board is empty by design.** Filling it means folding a Season in
+  progress into the committed, frozen `predictions.csv`, which is the one thing issue #11 froze it
+  against. The right moment is when the archive's page for the Season is complete.
+- **The loop is schedulable and is deliberately not scheduled.** Both write commands are idempotent
+  inside a round, which is all a cron entry or a workflow needs; none is committed. There is nothing
+  to seal yet, and a schedule that fetches upstream and pushes commits to this repository is the
+  repository owner's call rather than a default.
 
 Seven things about stage 11 worth knowing before building on it:
 
@@ -555,27 +617,31 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**The modelling stages are done, and #16 is closed.** What is left of the *live* half is **#17**
-(sealing a round before kickoff), which is where open risk 2 lives. #17 is also what turns the
-Season Projection from a historical exercise into a weekly one: a live Season is projected at every
-Prediction Round (`projection_rounds(..., live=True)`), and the Fixtures still to come have to be
-handed in from `fixtures.csv` rather than found in the corpus — `slate_at` says so in its docstring,
-and it is the one part of the projection with no live path yet.
+**Every ticket in the tracker is now closed except #18.** The modelling stages are done, the live
+loop is built, and what is left is not a stage — it is one unproven input and three issues worth
+filing.
 
-**Three things stage 12 hands #17, and none of them is optional.** A Pundit **cannot be sealed**, so
-the live loop seals the models and the Market Line and fills the Pundit column in retrospectively.
-`fixtures.csv` held **no E0 rows** on 27 Aug 2026, so upcoming Premier League Fixtures have no
-confirmed source yet and that is the first thing to re-check. And the corpus stops at 2025/26 —
-ingesting the Season in progress moves `epl.windows.LAST_SEASON`, which is the leakage protocol's
-own module, so it is a deliberate change rather than a config bump.
+**The one thing to re-check before anything else**: run `python -m epl.live upcoming` on a Friday
+afternoon of a Premier League round. If `fixtures.csv` carries E0 rows, the live half works today
+and `seal` will write and commit the round. If it does not, upcoming Premier League Fixtures have no
+confirmed source and that is the blocker for everything live — including the weekly Season
+Projection. Whatever it says, record the date and the result beside the two in docs/DECISIONS.md.
 
-Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
-unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage
-lands and there is no appetite to start the next one.
+**Ready now: issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). Unblocked
+since stage 1, needs nothing from the ledger, and is small. It is also no longer purely
+documentation: the API-Football stub's stated premise — that `fixtures.csv` makes it unnecessary —
+is the premise stage 13 could not confirm, so the stub records a measurement.
 
-And newly found rather than planned: the archive's index links **eighteen** Season pages, 2009/10
-onward, where the backfill uses nine. The eight before 2017/18 are ~3,000 more Lawrenson calls on
-the same source in the same shape — an issue worth filing, not a thing to fold into #17.
+**Three issues worth filing, none of them in scope anywhere yet:**
+
+- **A confirmed source of upcoming Premier League Fixtures.** The live loop is complete and idle
+  without one. API-Football is the named candidate and #18's stub is where the case for it lives.
+- **The live Season Projection.** `projection_rounds(..., live=True)` exists and `slate_at` cannot be
+  fed: a projection needs every remaining Fixture of the campaign, and the rolling file's horizon is
+  two days. Blocked on the same source as above.
+- **Eight more Seasons of Pundit calls.** The archive's index links eighteen Season pages, 2009/10
+  onward, where the backfill uses nine. The eight before 2017/18 are ~3,000 more Lawrenson calls on
+  the same source in the same shape.
 
 The model target is met, so there is no longer a pending question about accuracy.
 
@@ -588,8 +654,8 @@ gh issue view <n> | sed -n '/## Blocked by/,$p'
 ```
 conda env create -f environment.yml
 conda activate epl-predictor
-python -m epl.ingest fetch     # fill data/raw/ — 104 files, 26 Seasons x 4 tiers
-python -m epl.ingest build     # write matches.csv (52,672) + odds_availability.csv
+python -m epl.ingest fetch     # fill data/raw/ — 108 files, 27 Seasons x 4 tiers
+python -m epl.ingest build     # write matches.csv (52,672 closed + the Season in progress)
 python -m epl.pundits fetch    # cache the nine MyFootballFacts season pages
 python -m epl.pundits build    # re-freeze predictions.csv — 3,408 calls, cross-checked
 python -m epl.pundits grades   # exact-score and correct-Outcome rates per Pundit and Season
@@ -612,6 +678,9 @@ python -m epl.simulate checkpoints   # where a Season is projected from, and whe
 python -m epl.simulate posterior     # fit one posterior, and read it beside the MLE
 python -m epl.simulate project       # one Season Projection: title, Europe and relegation
 python -m epl.simulate validate      # project completed Seasons; where the real champion landed
+python -m epl.live upcoming    # what the rolling fixtures file holds, and what could be sealed
+python -m epl.live seal        # predict the upcoming round, write it to outputs/live/, commit it
+python -m epl.live score       # ingest results, then score what has been sealed
 pytest                         # add --run-network to also hit football-data.co.uk
 ```
 
