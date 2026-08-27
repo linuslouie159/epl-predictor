@@ -727,11 +727,20 @@ result in three places: beside the fetch table in docs/DECISIONS.md, in
 `PREMIER_LEAGUE_ROWS_SEEN`, which is the number that decides whether that stub stays a stub. Three
 fetches are recorded there as of 27 Aug 2026 and all three found nothing.
 
+**#20 is filed and open: a Telegram bot** — seal and score notifications, and the board on demand.
+Its first acceptance criterion is the gap #19 closed leaving open: the schedule now asks upstream
+twice a week whether `fixtures.csv` carries a Premier League row, and a fire that finds none is a
+quiet success, so *nothing announces the day the answer changes*. A bot is what would. Note the
+constraints the ticket carries — it must be read-only with respect to both stores (a chat app is not
+a second door into `outputs/live/`), and it must not quote a calibrated Live Season figure, the
+sequential diagnostic, accuracy as a headline, or a Pundit without its `note`.
+
 **Three issues worth filing, none of them in scope anywhere yet:**
 
 - **A confirmed source of upcoming Premier League Fixtures.** The live loop is complete, scheduled
   and idle without one. API-Football is the named candidate and `epl.v2.api_football` is where the
-  case for it lives — including the conditions that would revive it.
+  case for it lives — including the conditions that would revive it. #20 is partly blocked on it
+  too, though the useful half of that ticket is not.
 - **The live Season Projection.** `projection_rounds(..., live=True)` exists and `slate_at` cannot be
   fed: a projection needs every remaining Fixture of the campaign, and the rolling file's horizon is
   two days. Blocked on the same source as above.
