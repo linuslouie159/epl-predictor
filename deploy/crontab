@@ -1,0 +1,41 @@
+# The live loop's schedule (issue #19). Install with:
+#
+#   crontab -l > /tmp/current && cat /path/to/epl_predictor/deploy/crontab >> /tmp/current \
+#     && crontab /tmp/current
+#
+# then replace __ROOT__ with the absolute path of the clone on this Pi (`pwd` inside it).
+#
+# WHY THESE TIMES. A Prediction Round's sealing window opens at its As-Of Instant — midnight at
+# the start of the Tuesday or Friday it anchors to — and shuts at its first kickoff (ADR 0005).
+# Football-Data samples the pre-match odds on the *afternoon* of that day, so the window has two
+# ends that are both real: fire at midnight and the odds the Market Line needs do not exist yet;
+# fire after the first kickoff and the store refuses the round outright. 16:00 is after the
+# sample and comfortably before a 19:45 or 20:00 first kickoff.
+#
+# WHY TWICE. 18:30 is a retry, and it is free: sealing is idempotent inside a round, so the second
+# fire finds the round already sealed, writes nothing, adds no commit — and still pushes, which is
+# the whole point. The run that seals a round is exactly the run that may have been unable to
+# reach the network, and a sealed round that never left this Pi is not evidence of anything.
+#
+# WHY score ON THE SAME DAYS. A Tuesday round is played Tuesday to Thursday and a Friday round
+# Friday to Monday, so each morning fire scores the round that has just finished, hours before the
+# next one is sealed. It ingests the Live Season and rebuilds the match table itself, so nothing
+# else has to run first.
+#
+# CRON_TZ is what makes 16:00 mean 16:00 in London on a Pi whose own clock is not. Debian's cron
+# honours it; if this Pi's cron does not, the consequence is mild and worth knowing — the loop
+# would fire outside the window and exit 0 having sealed nothing, because the window is judged in
+# UK time by the code (epl.ledger.live.uk_now) whatever cron believes. A misconfigured schedule
+# here seals nothing; it cannot seal something wrongly.
+CRON_TZ=Europe/London
+
+# m  h  dom mon dow  command
+  0  6  *   *   2,5  __ROOT__/deploy/run_live.sh score
+  0 16  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push
+ 30 18  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push
+
+# Nothing here fires more often than that, and nothing here runs `python -m epl.ledger backfill`.
+# The Evaluation Window is over closed Seasons and must go on meaning the same thing from one week
+# to the next; regenerating it on a timer would also have `backfill` rewrite Predictions this loop
+# had sealed, which is ADR 0005's exact failure. The Live Season is sealed and scored, never
+# backfilled (epl.windows).

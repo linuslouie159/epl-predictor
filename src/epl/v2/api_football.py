@@ -18,11 +18,17 @@ stub to say what would have to change for the premise to stop being true. Stage 
 the honest answer is that *the premise was never confirmed in the first place*. ``fixtures.csv`` has
 never been observed carrying a Premier League row.
 
-Two fetches, recorded in ``FETCHES_MEASURED`` below and in docs/DECISIONS.md under "Measured at
-stage 13". Both found a file holding only Fixtures dated on or before the day it was generated: one
-League One tie and two Spanish on the first, one National League tie and four Spanish on the second.
-The second file was two days stale by its own ``Last-Modified`` header, and even that batch —
+Three fetches, recorded in ``FETCHES_MEASURED`` below and in docs/DECISIONS.md under "Measured at
+stage 13". All found a file holding only Fixtures dated on or before the day it was generated: one
+League One tie and two Spanish on the first, one National League tie and four Spanish on the other
+two. The second file was two days stale by its own ``Last-Modified`` header, and even that batch —
 generated three days before a Premier League round — carried none.
+
+The third fetch was taken eight hours after the second, on the eve of a Premier League round, and
+came back **byte-identical** to it: same md5, same ``Last-Modified``. So the file is not merely
+short-horizoned, it is regenerated irregularly enough to sit unchanged for two and a half days
+across a matchday — which rules out the reading that a fetch timed later in the day would have
+caught a fresher batch.
 
 Two details keep this from being a network problem or a parsing problem. The first fetch carried an
 ``E2`` row, so this is not a file that omits English football; it has simply never been seen
@@ -31,10 +37,17 @@ carrying the one tier this project predicts. And the results half of the same up
 which at the moment of generation is a couple of days, shorter than a Prediction Round's own sealing
 window.
 
-**Two fetches cannot prove a negative**, which is why this is documented rather than closed, and why
-``python -m epl.live upcoming`` asks the question on any given day and writes nothing. Run it on the
-Friday of a Premier League round before doing anything with this module. If E0 rows are there, the
-premise holds and this stub stays a stub.
+**Three fetches cannot prove a negative**, which is why this is documented rather than closed, and
+why ``python -m epl.live upcoming`` asks the question on any given day and writes nothing. Run it on
+the Friday of a Premier League round before doing anything with this module. If E0 rows are there,
+the premise holds and this stub stays a stub.
+
+Issue #19 changed who asks. The live loop now runs on a schedule, so this question is put to
+upstream twice a week by cron rather than whenever somebody remembers — and a fire that finds no
+Premier League row is a quiet success by design (:class:`epl.live.upcoming.NothingToSeal`). The
+consequence for this module is worth stating plainly: **the schedule will not tell anyone when the
+answer changes.** It will simply start sealing rounds. ``deploy/logs/live_loop.log`` is where that
+shows up, and appending a fetch here is still a hand's job.
 
 **What is blocked on it.** More than the seal. A live Season Projection needs every *remaining*
 Fixture of the campaign — :func:`epl.simulate.checkpoints.slate_at` says so in its own docstring —
@@ -58,6 +71,7 @@ from __future__ import annotations
 FETCHES_MEASURED: tuple[tuple[str, str, int, int], ...] = (
     ("2026-08-21 06:33 UTC", "not recorded", 3, 0),
     ("2026-08-27 06:12 UTC", "Tue 25 Aug 2026 09:59 GMT", 5, 0),
+    ("2026-08-27 14:21 UTC", "Tue 25 Aug 2026 09:59 GMT", 5, 0),
 )
 
 #: Premier League Fixtures ever observed in the rolling file, across every fetch above.
@@ -74,7 +88,9 @@ PREMIER_LEAGUE_ROWS_SEEN: int = 0
 #: What would have to become true for this to stop being a stub. Any one of these is enough.
 WHAT_WOULD_REVIVE_IT: tuple[str, ...] = (
     "`python -m epl.live upcoming`, run on the Friday of a Premier League round, keeps reporting no"
-    " E0 rows — establishing the two fetches above as a standing condition rather than a gap",
+    " E0 rows — establishing the fetches above as a standing condition rather than a gap. Issue"
+    " #19's schedule now asks this twice a week, so the evidence accumulates in"
+    " deploy/logs/live_loop.log whether or not anybody is reading it",
     "the rolling file's forward horizon stays shorter than a Prediction Round's sealing window, so"
     " a Fixture is never listed while there is still time to seal a Prediction for it",
     "a live Season Projection is wanted, which needs every remaining Fixture of the campaign and"

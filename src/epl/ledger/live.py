@@ -40,6 +40,11 @@ from epl.rounds import anchor
 #: than in UTC — an hour of British Summer Time is exactly the slack a seal deadline cannot afford.
 LOCAL_ZONE = "Europe/London"
 
+#: The remote a sealed round is pushed to (issue #19). Named rather than inlined so that
+#: :func:`push` reads as a sentence and the value is greppable — not so that it can be overridden.
+#: Which remote a clone pushes to is the clone's business, configured in its own ``.git/config``.
+DEFAULT_REMOTE = "origin"
+
 #: Files that belong in the store without being sealed rounds.
 ALLOWED_EXTRAS: frozenset[str] = frozenset({"README.md"})
 
@@ -51,6 +56,38 @@ REVISION_SEPARATOR = "."
 SEALABLE = "sealable"
 NOT_OPEN = "not open"
 KICKED_OFF = "kicked off"
+
+
+def uk_now() -> pd.Timestamp:
+    """This moment, as a UK wall-clock reading with no zone on it.
+
+    Every instant this store compares against — an As-Of Instant, a kickoff — comes off
+    Football-Data in UK local time and carries no zone (:mod:`epl.rounds`). So the moment they are
+    judged against has to be the UK's reading of now, and it has to be naive, because pandas
+    refuses to compare an aware timestamp with a naive one at all.
+
+    ``pd.Timestamp.now()`` is the machine's reading, which is the same thing only on a machine in
+    the UK. It is not one, in the two places this project actually runs: the desktop it was built
+    on is eight hours ahead, and a container defaults to UTC.
+
+    **Both directions fail silently and one of them is far worse.** A clock running *late* against
+    UK time turns a Friday afternoon inside a round's window into a Saturday morning after its
+    kickoff; :func:`window` returns ``KICKED_OFF`` and the loop seals nothing, for ever, without
+    saying why. A clock running *early* defeats the other end instead — measured on the build
+    machine, ``pd.Timestamp.now()`` read 2026-08-28 00:17 where the UK read 2026-08-27 17:17, so
+    Friday's midnight As-Of Instant appeared to have passed on Thursday evening. That seals a round
+    under a moment that has not happened, reading odds Football-Data has not sampled yet, and
+    ``NOT_OPEN`` exists precisely to refuse it. Sealing nothing is eventually noticed; a false
+    instant in this store is not noticeable at all, which is the whole reason the store exists
+    (ADR 0005).
+
+    Not merely a timezone tidy-up, then: it is the difference between a scheduled loop that works
+    anywhere and one that works in one country (issue #19).
+
+    Named ``uk_now`` rather than ``now`` because three functions here already take a ``now``
+    parameter, and a module-level ``now`` they could not call would be worse than no helper at all.
+    """
+    return pd.Timestamp.now(tz=LOCAL_ZONE).tz_localize(None)
 
 
 def window(as_of: pd.Timestamp, first_kickoff: pd.Timestamp, now: pd.Timestamp) -> str:
@@ -174,7 +211,7 @@ def _write(
     """
     opening = pd.Timestamp(rows["as_of_instant"].min())
     deadline = pd.Timestamp(rows["kickoff"].min())
-    moment = pd.Timestamp.now() if now is None else pd.Timestamp(now)
+    moment = uk_now() if now is None else pd.Timestamp(now)
 
     verdict = window(opening, deadline, moment)
     if verdict == NOT_OPEN:
@@ -306,6 +343,45 @@ def commit(paths: Iterable[Path], *, message: str) -> str | None:
     return (_git("rev-parse", "HEAD") or "").strip() or None
 
 
+def push() -> str | None:
+    """Push the current branch to :data:`DEFAULT_REMOTE`, and name the ref it was sent to.
+
+    A commit is proof of *when*, and on the machine that made it that is the whole of the claim.
+    It stops being the whole of it as soon as the loop runs somewhere else — a Pi, a container, a
+    runner — because a commit nobody else can reach is a claim only its author can inspect, and the
+    machine holding it is the one that would have to be trusted. So an unattended loop pushes, and
+    a push that fails is as loud as a commit that fails (issue #19): the sealed file on disk looks
+    identical either way, which is exactly why the run has to say which happened.
+
+    Deliberately pushes the *branch* rather than the sealed file, because git has no other unit.
+
+    Takes no arguments. A ``remote`` parameter would be a setting nothing sets: the loop calls this
+    with no argument, and no flag, environment variable or compose key reaches it. Which remote a
+    round goes to is a property of the clone, configured where every other property of the clone is
+    (``deploy/README.md``), and a second place to say it is a second place for it to be wrong.
+
+    Returns ``None`` when there is no repository, no such remote, a detached HEAD, or the remote
+    refuses — a rejected non-fast-forward being much the likeliest of those on a repository worked
+    on from two machines. All of them leave the round unproven off this machine, and the caller has
+    to say so rather than assume. Pushing again when there is nothing to push is not one of them:
+    git reports "Everything up-to-date" and exits 0, which is what makes the schedule's second fire
+    a free retry of a first fire that could not reach the network.
+
+    The returned string names the ref this *asked* git to advance, and is worth reading as that
+    rather than as an observation of the remote's state — nothing here re-reads the remote.
+    """
+    branch = (_git("rev-parse", "--abbrev-ref", "HEAD") or "").strip()
+    if not branch:
+        return None
+    if branch == "HEAD":
+        # Detached: there is no branch for the remote to advance, and guessing one would put a
+        # sealed round somewhere nobody would look for it.
+        return None
+    if _git("push", DEFAULT_REMOTE, f"HEAD:refs/heads/{branch}") is None:
+        return None
+    return f"{DEFAULT_REMOTE}/{branch}"
+
+
 def seal_violations(*, now: pd.Timestamp | None = None) -> list[str]:
     """Every way the sealed store has been rewritten after the fact.
 
@@ -317,7 +393,7 @@ def seal_violations(*, now: pd.Timestamp | None = None) -> list[str]:
     committed at all — an uncommitted file proves nothing, and after kickoff there is no longer any
     way to prove it.
     """
-    moment = pd.Timestamp.now() if now is None else pd.Timestamp(now)
+    moment = uk_now() if now is None else pd.Timestamp(now)
     complaints: list[str] = []
 
     for extra in _unexpected_files():

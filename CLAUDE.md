@@ -157,7 +157,28 @@ Do not "fix" these without reading the linked ADR first:
   the store already holds. It is for correcting a bug, never for refreshing a quote.
 - **`epl.live.__main__.clock` is a function and not a `--now` flag**, on purpose. That value decides
   whether a round is inside its sealing window, so an operator who could name it could seal a round
-  after its own kickoff and have the file say otherwise.
+  after its own kickoff and have the file say otherwise. It reads **`epl.ledger.live.uk_now`, not
+  `pd.Timestamp.now`**, and that is the same rule from the other side: every instant it is compared
+  against is a UK local reading off Football-Data, so a machine in another zone gets the window
+  wrong without anybody choosing to — eight hours on the desktop this was built on, one hour of
+  British Summer Time in a container defaulting to UTC. **Both directions fail silently and they
+  are not equally bad.** A clock that runs *late* refuses a round as having kicked off, and the loop
+  seals nothing; a clock that runs *early* — which is what UTC+8 did, reading 2026-08-28 00:17 where
+  the UK read 2026-08-27 17:17 — defeats the `NOT_OPEN` end instead, sealing a round under a moment
+  that has not happened and odds Football-Data has not sampled. The second is the dangerous one:
+  sealing nothing is eventually visible, and a false instant in this store is not visible at all.
+  `tests/live/test_unattended.py` pins the function and the absence of the flag. It pins the *zone*
+  only on a machine outside the UK — on a UK machine the two implementations are observationally
+  identical and no test can separate them, which is why the expectation there is derived from UTC.
+- **`seal` exits 0 when there is nothing to seal, and that is not sloppiness about failure.**
+  `epl.live.upcoming.NothingToSeal` is a subclass of `LiveError` covering the two silences that need
+  nobody — no round inside its window, and a rolling file with no Premier League row — because those
+  are most of the week and, until upcoming Fixtures have a source, *every* fire of the schedule. A
+  job that goes red twice a week for a season is one whose owner stops reading it. Everything else
+  still exits 1: a stale `LIVE_SEASON`, a round written but not committed, a round committed but not
+  pushed. An upstream shape change stays an uncaught `IngestError` with its traceback on purpose —
+  the rolling file's shape is `epl.ingest`'s to complain about, and catching it here would put
+  "upstream changed" behind the same exit code as "it is Wednesday".
 - **Refreshing a cached raw file archives the old bytes** into `superseded/` instead of replacing
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
   Both are explained where they live — `src/epl/ingest/cache.py`, which both the Football-Data
@@ -192,6 +213,10 @@ Do not "fix" these without reading the linked ADR first:
 - Never put the Live Season in the Evaluation Window, and never backfill it. It is sealed only.
 - Never tune a hyperparameter using data from outside the Burn-In Window (2000/01–2004/05).
 - Never report accuracy as the headline metric. RPS is primary; accuracy is for lay explanation only.
+- Never add a `--now` flag so a missed round can be sealed late, and never schedule
+  `python -m epl.ledger backfill`. The first hands an operator the one lie this store exists to
+  prevent; the second would regenerate Predictions the live loop had sealed (ADR 0005) and move the
+  Evaluation Window's numbers on a timer.
 
 ## Status
 
@@ -365,6 +390,40 @@ rather than closed**, and this is the thing to know before planning anything liv
   inside a round, which is all a cron entry or a workflow needs; none is committed. There is nothing
   to seal yet, and a schedule that fetches upstream and pushes commits to this repository is the
   repository owner's call rather than a default.
+
+**Stage 15 is built**: the schedule (`deploy/`, issue #19) — the live loop running unattended in a
+container on a Raspberry Pi, fired by the Pi's own crontab. `deploy/run_live.sh seal --push`.
+
+The two decisions #19 asked to be made deliberately were made by the repository owner on 27 Aug 2026
+and are recorded in docs/DECISIONS.md, "The schedule, and where it runs":
+
+- **A Pi in a container, not GitHub Actions.** Actions was weighed and rejected: `data/raw/` and
+  `data/processed/` are gitignored and `score` rebuilds the match table from all 108 files, so every
+  run would cold-fetch the whole corpus twice a week forever. The price accepted is real and is
+  **open risk 6** — a round whose window passes while the Pi is off is lost, and `supersede` refuses
+  a round after kickoff on purpose. Tolerable only because there is nothing to seal yet; revisit it
+  the day `fixtures.csv` starts carrying Premier League rows.
+- **An automated push is acceptable**, opt-in via `--push`, over a deploy key. A commit proves *when*
+  to whoever can reach the machine holding it, and on a Pi that is nobody — so an unattended loop
+  that does not push has not finished sealing anything. A failed push exits 1 and says `NOT PUSHED`,
+  as loudly as a failed commit, because the file on disk looks identical either way.
+
+Four things about stage 15 worth knowing:
+
+- **The image is the environment; the repository is bind-mounted over it.** So `git pull` updates the
+  code with no rebuild, and a sealed round lands in a real checkout rather than in a container layer
+  that evaporates — which is not convenience, since evidence nobody can inspect is not evidence.
+- **The Pi's other tenant is a venv and stays one.** A paper-trading project on the same box installs
+  as prebuilt aarch64 wheels specifically to avoid a toolchain; this project needs conda-forge and a
+  pinned BLAS provider (ADR 0009). The container exists to stop two package managers competing for
+  one machine's system libraries, and for no other reason. The two share the crontab and a log-block
+  convention and nothing else — deliberately not an interpreter, not a virtualenv, not a process.
+- **18:30 is a retry and it still pushes.** A second fire inside a round finds it already sealed,
+  writes nothing and adds no commit — and pushing is then the whole of what is left for it to do,
+  which is the point: the run that seals a round is exactly the run that may have been unable to
+  reach the network.
+- **Nothing here schedules `backfill`.** It would regenerate Predictions the loop had sealed — ADR
+  0005's exact failure — and move the Evaluation Window's numbers on a timer.
 
 **Stage 14 is built**: the deferred-v2 stubs (`src/epl/v2/`, issue #18) — the XGBoost/ML layer, the
 Golden Boot player model and the API-Football client, written down instead of built (decision 12).
@@ -646,32 +705,33 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Every ticket through #18 is built.** The modelling stages are done, the live loop is built, and
-the deferred features are written down. What is left is **#19** — running the live loop on a
-schedule, filed out of stage 13's "deliberately not scheduled" — plus one unproven input and three
-issues worth filing.
+**Every ticket through #19 is built.** The modelling stages are done, the live loop is built, the
+deferred features are written down, and the schedule that runs the loop is committed under `deploy/`.
+What is left is one unproven input and three issues worth filing.
 
-**#19 is blocked on that input rather than on a decision, and the ticket says so.** A schedule built
-today would fire twice a week onto a `fixtures.csv` with no Premier League row in it, forever. Its
-two real questions — GitHub Actions versus local cron, given that either must *push commits to this
-repository* for a sealed round to prove anything, and what time on Tuesday and Friday afternoon it
-fires — are the repository owner's to answer, not an agent's.
+**The schedule was built knowing it will seal nothing, and that is not a contradiction.** #19's
+fourth acceptance criterion names the case by name — "the *only* case until upcoming Fixtures have a
+source" — so the ticket was written to be built despite the blocker rather than after it. The
+schedule is installed now so that the day upstream starts listing Premier League Fixtures, the loop
+is already watching. What it cannot do is tell anybody that day has come: a fire that finds no E0 row
+is a quiet success by design, so the loop will simply start sealing rounds and nothing will announce
+it. `deploy/logs/live_loop.log` is where that shows up.
 
-**The one thing to re-check before anything else**: run `python -m epl.live upcoming` on a Friday
-afternoon of a Premier League round. If `fixtures.csv` carries E0 rows, the live half works today
-and `seal` will write and commit the round. If it does not, upcoming Premier League Fixtures have no
-confirmed source and that is the blocker for everything live — including the weekly Season
-Projection. Whatever it says, record the date and the result in three places: beside the two fetches
-in docs/DECISIONS.md, in `epl.v2.api_football.FETCHES_MEASURED`, and — if a Premier League row ever
-appears — in `PREMIER_LEAGUE_ROWS_SEEN`, which is the number that decides whether that stub stays a
-stub.
+**The one thing to re-check periodically**: run `python -m epl.live upcoming` on a Friday afternoon
+of a Premier League round — or just read the log, which now asks twice a week. If `fixtures.csv`
+carries E0 rows, the live half works and `seal` will write, commit and push the round. If it does
+not, upcoming Premier League Fixtures still have no confirmed source and that is the blocker for
+everything live — including the weekly Season Projection. Whatever it says, record the date and the
+result in three places: beside the fetch table in docs/DECISIONS.md, in
+`epl.v2.api_football.FETCHES_MEASURED`, and — if a Premier League row ever appears — in
+`PREMIER_LEAGUE_ROWS_SEEN`, which is the number that decides whether that stub stays a stub. Three
+fetches are recorded there as of 27 Aug 2026 and all three found nothing.
 
 **Three issues worth filing, none of them in scope anywhere yet:**
 
-- **A confirmed source of upcoming Premier League Fixtures.** The live loop is complete and idle
-  without one, and #19 is blocked on it. API-Football is the named candidate and
-  `epl.v2.api_football` is where the case for it lives — including the conditions that would
-  revive it.
+- **A confirmed source of upcoming Premier League Fixtures.** The live loop is complete, scheduled
+  and idle without one. API-Football is the named candidate and `epl.v2.api_football` is where the
+  case for it lives — including the conditions that would revive it.
 - **The live Season Projection.** `projection_rounds(..., live=True)` exists and `slate_at` cannot be
   fed: a projection needs every remaining Fixture of the campaign, and the rolling file's horizon is
   two days. Blocked on the same source as above.
@@ -716,7 +776,9 @@ python -m epl.simulate project       # one Season Projection: title, Europe and 
 python -m epl.simulate validate      # project completed Seasons; where the real champion landed
 python -m epl.live upcoming    # what the rolling fixtures file holds, and what could be sealed
 python -m epl.live seal        # predict the upcoming round, write it to outputs/live/, commit it
+python -m epl.live seal --push # and push it — what makes it evidence off the machine that made it
 python -m epl.live score       # ingest results, then score what has been sealed
+deploy/run_live.sh seal --push # the same, in the container the Pi's crontab fires (deploy/README.md)
 pytest                         # add --run-network to also hit football-data.co.uk
 ```
 

@@ -194,6 +194,20 @@ class TestChoosingTheRound:
         with pytest.raises(upcoming.LiveError, match="no row in a tier this project predicts"):
             upcoming.next_round(fixtures, now=pd.Timestamp("2026-08-28 14:00"))
 
+    def test_both_silences_are_the_same_refusal_because_neither_needs_anybody(
+        self, make_rolling: Callable[..., pd.DataFrame], in_progress: pd.DataFrame
+    ) -> None:
+        """The two complaints above say different things and mean the same thing to a schedule:
+        there is nothing to seal, and that is not a problem. A stale
+        :data:`epl.windows.LIVE_SEASON` or a rolling file that changed shape stays a plain
+        :class:`~epl.live.upcoming.LiveError`, because those do need somebody (issue #19)."""
+        shut = upcoming.to_predict(make_rolling({"date": "2026-08-29"}), in_progress)
+        empty = upcoming.to_predict(make_rolling({"division": "E2"}), in_progress)
+
+        for fixtures in (shut, empty):
+            with pytest.raises(upcoming.NothingToSeal):
+                upcoming.next_round(fixtures, now=pd.Timestamp("2026-08-27 14:00"))
+
     def test_a_round_is_described_in_one_line(
         self, make_rolling: Callable[..., pd.DataFrame], in_progress: pd.DataFrame
     ) -> None:

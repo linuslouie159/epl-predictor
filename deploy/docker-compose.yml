@@ -1,0 +1,68 @@
+# The live loop on the Pi (issue #19). One service, run to completion and thrown away.
+#
+#   docker compose -f deploy/docker-compose.yml run --rm live seal --push
+#   docker compose -f deploy/docker-compose.yml run --rm live score
+#   docker compose -f deploy/docker-compose.yml run --rm live upcoming
+#
+# There is no `up`, no `restart: unless-stopped` and no scheduler inside the container. The Pi's
+# own crontab fires it (deploy/crontab), the container exits, and the exit code is the whole of
+# what the schedule learns — which is the only reason `seal` was given an exit-code contract worth
+# reading (epl.live.__main__._seal). A long-running container that had crashed would look exactly
+# like one with nothing to seal, and this loop has nothing to seal most of the week.
+
+# Named explicitly. Compose otherwise names the project after this file's directory — "deploy" —
+# which on a Pi that runs more than one thing is a name that tells nobody anything.
+name: epl-live
+
+services:
+  live:
+    image: epl-predictor:live
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+
+    # The repository, not a copy of it. Sealed rounds are evidence and have to land in a checkout
+    # a person can inspect, and the code the loop runs has to be the code `git pull` last fetched.
+    # EPL_REPO defaults to the parent of this file's directory, which is right when compose is run
+    # from inside the clone; set it in deploy/.env when it is not.
+    volumes:
+      - ${EPL_REPO:-..}:/repo
+      # The deploy key, read-only. Pushing is what makes a sealed round evidence off this machine,
+      # and read-only is the whole of the container's business with it.
+      #
+      # Mounted under HOME rather than under /root, because `user:` below means the container is
+      # not root and ssh looks for keys in $HOME/.ssh. The *whole* directory goes in, not just the
+      # key, because ssh also needs `known_hosts` — and read-only works only because the Pi's owner
+      # has already accepted github.com's host key by hand (deploy/README.md, step 1). If they have
+      # not, ssh fails host key verification and the loop exits 1 saying NOT PUSHED, which is the
+      # right way for that to go wrong.
+      - ${SSH_DIR:-~/.ssh}:/home/epl/.ssh:ro
+
+    working_dir: /repo
+
+    # Run as the user who owns the clone, so what the loop writes is not root-owned and the owner
+    # can still `git push` by hand. 1000:1000 is the first account on Raspberry Pi OS; override in
+    # deploy/.env if the clone belongs to somebody else (`id -u` and `id -g`).
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    environment:
+      EPL_PROJECT_ROOT: /repo
+      TZ: Europe/London
+      # Where ssh looks for the key and for known_hosts. Set explicitly because `user:` above gives
+      # the container a uid with no passwd entry, and HOME then defaults to `/` — where ssh finds
+      # no keys, and the push fails for a reason that reads like a credentials problem and is not.
+      HOME: /home/epl
+      # A bind-mounted repository is owned by a different uid than the image was built as, and git
+      # refuses to touch one it considers dubiously owned. Set through the environment rather than
+      # with `git config --global` at build time, because a global config lives in a HOME this
+      # container does not have once `user:` is set.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /repo
+      # The identity the sealed commit carries comes from the clone's own .git/config — see
+      # deploy/README.md. It is deliberately not set here: a commit in the store that proves when a
+      # Prediction was made should say who made it, and that is the Pi's owner rather than a
+      # container image.
+
+    # Football-Data and, when pushing, the git remote. Nothing listens.
+    network_mode: bridge

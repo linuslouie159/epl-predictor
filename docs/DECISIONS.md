@@ -1255,12 +1255,19 @@ The live loop was then run for real, and what it found is the state of open risk
 |---|---|---|---|
 | 2026-08-21 06:33 UTC — round 1 kicked off that evening | not recorded | 3 | **0** |
 | 2026-08-27 06:12 UTC — round 2 kicked off the next day | Tue 25 Aug 09:59 GMT | 5 | **0** |
+| 2026-08-27 14:21 UTC — same day, eight hours later | Tue 25 Aug 09:59 GMT | 5 | **0** |
 
-Both fetches found a file holding only Fixtures dated on or before the day it was generated: one
+All three fetches found a file holding only Fixtures dated on or before the day it was generated: one
 League One tie (`E2`, Sheffield Wed v Bradford City) and two Spanish on the first, one National
-League tie (`EC`) and four Spanish on the second. The second fetch's file was **two days stale** —
+League tie (`EC`) and four Spanish on the other two. The second fetch's file was **two days stale** —
 the `Last-Modified` header says it was written on the Tuesday morning, and even that batch, generated
 three days before a Premier League round, carried no Premier League row.
+
+**The third fetch was taken at stage 15 and came back byte-identical to the second** — same md5, same
+`Last-Modified`, eight hours apart on the eve of a Premier League round. That closes off the most
+hopeful reading of the first two, which was that a fetch timed later in the day might catch a fresher
+batch. It would not have: upstream had not regenerated the file in two and a half days, across a
+matchday. The horizon is short *and* the refresh is irregular, and neither is a fetching mistake.
 
 The `E2` row on the first fetch is worth noticing: this is not a file that omits English football.
 It has carried an English tier this project ingests. It has simply never been seen carrying the one
@@ -1338,10 +1345,118 @@ it could not be evidence of that whatever it said. The sealed row stands and is 
 the fix goes into the code so the next round is right. A track record that could be tidied up
 afterwards would not be a track record.
 
+## The schedule, and where it runs
+
+Issue #19 asked for two decisions to be made deliberately rather than coded around, and required the
+reason to be recorded here — "in particular whether an automated push to this repository is
+acceptable". Both were made by the repository owner on 27 August 2026.
+
+### Where it runs: a container on a Raspberry Pi, not GitHub Actions
+
+**Rejected: GitHub Actions.** It fires whether or not a machine at home is awake, which is the one
+thing that genuinely matters for a deadline that cannot be recovered — a round whose window has shut
+is gone, and `supersede` refuses a round after its first kickoff on purpose. Against that: every run
+would rebuild the conda environment and re-fetch the whole raw cache, because `data/raw/` and
+`data/processed/` are gitignored and `score` rebuilds the match table from all 108 files. That is a
+cold ingest of the entire corpus twice a week, in perpetuity, against a free file host that asks for
+nothing in return.
+
+**Chosen: a Raspberry Pi 5 the owner already runs, with the loop in Docker.** The raw cache lives on
+it and persists, so a fire is a few files rather than a hundred. The cost accepted in exchange is
+real and should not be glossed: **if the Pi is off on a Friday afternoon, that round is lost and
+cannot be sealed later.** That is a worse failure mode than Actions', and it was chosen anyway,
+because the input this loop is waiting for does not exist yet — see open risk 2 — and a schedule
+firing onto an empty file loses nothing at all. Revisit the moment `fixtures.csv` starts carrying
+Premier League rows.
+
+**Why a container, on a machine that already runs Python on bare metal.** The Pi's other tenant is a
+paper-trading loop installed as a venv of prebuilt aarch64 wheels, chosen that way specifically so
+that nothing on the box needs a toolchain. This project cannot join it there: ADR 0009 chose
+conda-forge for the prebuilt scientific stack, and `environment.yml` pins the BLAS provider because
+the wrong one aborts the interpreter on every LAPACK call. Two package managers competing for one
+machine's system libraries is the failure the image exists to prevent, and it is the only reason it
+exists. The two projects therefore share the Pi's crontab and a log-block convention and nothing
+else — deliberately not an interpreter, not a virtualenv, and not a process.
+
+The image is the *environment*; the repository is bind-mounted over it. So `git pull` updates the
+code with no rebuild, and a sealed round lands in a real checkout rather than inside a container
+layer that evaporates. That last part is not convenience: `outputs/live/` is evidence (ADR 0005),
+and evidence written somewhere nobody can inspect is not evidence.
+
+### An automated push is acceptable, and a push that fails is loud
+
+**Yes.** The loop commits and pushes to `origin` unattended, over a deploy key, on `seal --push`.
+
+The reasoning is ADR 0005's rather than a convenience. A commit proves *when* a Prediction existed
+to anyone who can reach the machine holding it. On the desktop that was everyone who mattered; on a
+Pi in a cupboard it is nobody, and the claim collapses to "trust the box". So an unattended loop that
+does not push has not finished sealing anything, and `epl.ledger.live.push` sits beside `commit` for
+the reason that module already gives for `commit` being there: one module knowing about git is what
+makes "git history is the proof" checkable in one place.
+
+Pushing is **opt-in** (`--push`, off by default). An outward-facing act on somebody's repository is
+the schedule's to ask for, not a default a person at a keyboard should discover by accident.
+
+A push that fails exits 1 and says `NOT PUSHED`, as loudly as a seal that could not be committed,
+because the sealed file on disk looks identical either way. The 18:30 fire retries it: the round is
+already sealed by then, so pushing is the whole of what is left for that run to do — which is
+exactly what makes a second fire worth scheduling, since the run that seals a round is the run that
+may have been unable to reach the network.
+
+### When it fires: 16:00 and 18:30 UK, Tuesday and Friday
+
+The window opens at the round's As-Of Instant — midnight at the start of its anchor day — and shuts
+at its first kickoff. Football-Data samples the pre-match odds on the *afternoon* of that day, so
+both ends are real: fire at midnight and the odds the Market Line needs do not exist yet; fire after
+the first kickoff and the store refuses the round outright. 16:00 is after the sample and comfortably
+before a 19:45 or 20:00 first kickoff.
+
+18:30 is a retry and is free, because sealing is idempotent inside a round. `score` runs at 06:00 on
+the same two days: a Tuesday round is played Tuesday to Thursday and a Friday round Friday to
+Monday, so each morning fire scores the round that has just finished, hours before the next is
+sealed.
+
+### Two things the schedule forced into the code
+
+**The clock was reading the wrong country, and had been all along.** `epl.live.__main__.clock`
+returned `pd.Timestamp.now()` — the *machine's* naive local time — and every instant it is compared
+against comes off Football-Data in UK local time. On the desktop this project was built on, which is
+eight hours ahead, a Friday afternoon inside a round's window reads as Saturday morning and the round
+is refused as having kicked off; a container defaulting to UTC gets the British Summer Time hour
+wrong in the other direction. Neither says anything when it happens — the loop simply seals nothing,
+forever. `epl.ledger.live.uk_now` converts explicitly and both the store's defaults and the command
+line now read it.
+
+Measured on the build machine while fixing it, 27 Aug 2026: `pd.Timestamp.now()` returned
+**2026-08-28 00:17** where the UK read **2026-08-27 17:17**. Not an offset — a different *day*, and
+the wrong side of a Friday round's midnight As-Of Instant. The old code would have judged Friday's
+window open on Thursday evening and sealed a round under a moment that had not happened, reading
+odds Football-Data had not yet sampled. That is the early end of the window (`NOT_OPEN`) being
+defeated by the clock rather than by anybody's decision, and it is the more dangerous of the two
+directions: sealing nothing is visible eventually, and sealing something under a false instant is
+not visible at all. It is a latent bug the loop had while it was run by hand from one desk, and a
+schedule is what made it certain. **`clock` is still a function and still not a `--now` flag**
+(criterion 7); `tests/live/test_unattended.py` fails if either changes.
+
+**"Nothing to seal" had to stop being a failure.** `seal` exited 1 whenever no round could be
+identified, which is correct for a person and ruinous for a schedule: no round is inside its window
+most of the week, and until upcoming Fixtures have a source it is *every* fire. A job that goes red
+twice a week for a season is a job whose owner stops reading it, and the next thing they do not read
+is the one that mattered. `epl.live.upcoming.NothingToSeal` now separates the two silences that need
+nobody — an empty file, and a clock outside every window — from the refusals that do: a rolling file
+that changed shape, and a `LIVE_SEASON` gone stale in either direction. The first pair exit 0, the
+second exit 1. That distinction is drawn by an exception type rather than by reading messages,
+because a message is not a contract.
+
+An upstream shape change stays an uncaught `IngestError` with its traceback, deliberately. The shape
+of the rolling file is `epl.ingest`'s to complain about, and widening `epl.live`'s handler to catch
+it would put "upstream changed" behind the same exit code as "it is Wednesday".
+
 ## Open risks
 
 1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.
-2. **`fixtures.csv` has never been seen carrying a Premier League row, and that is now the only unproven link in the live path.** Everything else it named closed at stage 13. `mmz4281/2627/E0.csv` exists and parses, so the results half is proven. The corpus no longer stops at 2025/26: `epl.windows.LAST_SEASON` moved to 2026, deliberately, and `LIVE_SEASON` is a third span that is ingested but in neither Window. `epl.live` seals a round, refuses to rewrite one, supersedes one under a new As-Of Instant, and scores retrospectively — all tested end to end against the real corpus and the real registry. What remains is the input: two fetches (21 and 27 Aug 2026) found **no E0 rows**, a forward horizon of about two days at the moment of generation, and a two-day-stale file three days before a Premier League round. The file has carried an English lower tier, so it is not that it omits English football. See "The live loop, and the input it is still waiting for". **This is measured and documented rather than closed**, because two fetches cannot prove a negative — and `python -m epl.live upcoming` is what asks the question on any given day, writing nothing. It also puts issue #18's premise in doubt: API-Football was deferred *because* `fixtures.csv` carries upcoming Fixtures with the Market Line — and stage 14 closed #18 by writing that doubt into `epl.v2.api_football` as data (`FETCHES_MEASURED`, `PREMIER_LEAGUE_ROWS_SEEN = 0`, `WHAT_WOULD_REVIVE_IT`) rather than by resolving it, which only a Friday fetch can do. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — now asked of the Pundit source too, where it has already failed once correctly (Coventry and Hull).
+2. **`fixtures.csv` has never been seen carrying a Premier League row, and that is now the only unproven link in the live path.** Everything else it named closed at stage 13. `mmz4281/2627/E0.csv` exists and parses, so the results half is proven. The corpus no longer stops at 2025/26: `epl.windows.LAST_SEASON` moved to 2026, deliberately, and `LIVE_SEASON` is a third span that is ingested but in neither Window. `epl.live` seals a round, refuses to rewrite one, supersedes one under a new As-Of Instant, and scores retrospectively — all tested end to end against the real corpus and the real registry. What remains is the input: three fetches (21 Aug and twice on 27 Aug 2026) found **no E0 rows**, a forward horizon of about two days at the moment of generation, and a two-day-stale file three days before a Premier League round. The third was taken eight hours after the second and came back byte-identical, so the file is regenerated irregularly as well as short-horizoned — a later fetch on the day would not have caught a fresher batch. The file has carried an English lower tier, so it is not that it omits English football. See "The live loop, and the input it is still waiting for". **This is measured and documented rather than closed**, because three fetches cannot prove a negative — and `python -m epl.live upcoming` is what asks the question on any given day, writing nothing. Stage 15 put that question on a timer: the schedule fires twice a week and a fire that finds no E0 row is a quiet success by design, so **the evidence now accumulates in `deploy/logs/live_loop.log` whether or not anybody is reading it — and nothing will announce the day the answer changes.** It will simply start sealing rounds. It also puts issue #18's premise in doubt: API-Football was deferred *because* `fixtures.csv` carries upcoming Fixtures with the Market Line — and stage 14 closed #18 by writing that doubt into `epl.v2.api_football` as data (`FETCHES_MEASURED`, `PREMIER_LEAGUE_ROWS_SEEN = 0`, `WHAT_WOULD_REVIVE_IT`) rather than by resolving it, which only a Friday fetch can do. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — now asked of the Pundit source too, where it has already failed once correctly (Coventry and Hull).
 3. ~~**MyFootballFacts parseability is unverified.** Content correctness was confirmed — a 2025/26 result cross-checked exactly against Football-Data — but the HTML has not been parsed across all nine season pages.~~ **Closed at stage 7.** All nine parse, yielding **3,408 calls** of a possible 3,420, and the cross-check went far past the one row the ticket asked for: the page prints the real score beside every call, and **3,402 of the 3,406 that carry one match Football-Data**, with the four exceptions named above. The HTML is hand-maintained and reads like it — annotated names, six misspellings, two Scorelines dropped inside a Club's name, and which table holds the predictions moving between pages — so the parser recognises a call by its shape rather than by where it sits, and refuses a page that yields fewer than 360 or more than 420. `tests/pundits/test_over_the_corpus.py` re-derives all of it.
 4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.
+6. **A round whose sealing window passes while the Pi is off is lost, and cannot be recovered.** This is the price of choosing a machine at home over GitHub Actions at stage 15, and it was chosen knowingly — see "The schedule, and where it runs". `supersede` refuses a round after its first kickoff on purpose, so there is no catching up afterwards: the round is simply absent from the track record, and a track record with unexplained gaps is worth less than one without. Two things make it tolerable *today* and neither is permanent. There is nothing to seal at all while open risk 2 stands, so a missed fire currently costs nothing; and the loop fires twice per window, so only an outage spanning both loses the round. **Revisit this the moment `fixtures.csv` starts carrying Premier League rows** — at that point the Pi's uptime becomes load-bearing for the one store in this project that cannot be regenerated, and GitHub Actions' argument (it does not depend on a machine at home being awake) becomes the stronger one. The mitigation short of moving is to watch `deploy/logs/live_loop.log` for a week with no `===== RUN` block in it, which is what an off Pi looks like from here.

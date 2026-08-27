@@ -52,14 +52,20 @@ def live_scoreboard_path() -> Path:
 
 
 def clock() -> pd.Timestamp:
-    """Now — behind a function so a test can stop it.
+    """Now, in UK local time — behind a function so a test can stop it.
 
     Deliberately **not** a command-line option. This is the value that decides whether a round is
     inside its sealing window, so an operator who could name it could seal a round after its own
     kickoff and have the file say otherwise, which is the one thing this store exists to prevent
     (ADR 0005). The commit timestamp git records is not overridable either, and for the same reason.
+
+    A flag is not the only way to get the wrong moment, though, and the other way needs nobody to
+    choose it: :func:`epl.ledger.live.uk_now` is called rather than ``pd.Timestamp.now`` because a
+    machine outside the UK reads its own zone and every kickoff it is compared against is in the
+    UK's. That was a latent bug the whole time this loop was run by hand from one desk, and a
+    schedule is what makes it certain — a container defaults to UTC (issue #19).
     """
-    return pd.Timestamp.now()
+    return store.uk_now()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -89,6 +95,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="write the round without committing it — it is not evidence until it is committed",
     )
+    sealing.add_argument(
+        "--push",
+        action="store_true",
+        help="push the commit to its remote — what an unattended loop on another machine needs",
+    )
 
     scoring = sub.add_parser("score", help="ingest results and score what has been sealed")
     scoring.add_argument(
@@ -103,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
     # of the two the caller meant is not something to guess at.
     if args.command == "score" and args.matches is not None and not args.no_ingest:
         parser.error("--matches needs --no-ingest; an ingest rebuilds the canonical match table")
+    # Pushing a branch that was deliberately not given the round is the one combination that could
+    # report success over an unproven seal — `pushed to origin/main`, exit 0, and the round sitting
+    # uncommitted in the working tree. Refused for the same reason as above: which half the caller
+    # meant is not something to guess at.
+    if args.command == "seal" and args.no_commit and args.push:
+        parser.error("--push contradicts --no-commit; there would be no committed round to push")
 
     ledger.register_all()
 
@@ -114,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             cached=args.cached,
             supersede=args.supersede,
             commit=not args.no_commit,
+            push=args.push,
         )
     if args.command == "score":
         return _score(args.matches, ingest_first=not args.no_ingest)
@@ -172,13 +190,34 @@ def _upcoming(matches_path: Path | None, *, cached: bool) -> int:
 
 
 def _seal(
-    matches_path: Path | None, *, cached: bool, supersede: bool, commit: bool
+    matches_path: Path | None,
+    *,
+    cached: bool,
+    supersede: bool,
+    commit: bool,
+    push: bool,
 ) -> int:
+    """Seal the round that is open now, and say plainly through the exit code what happened.
+
+    The exit code is the whole interface to a schedule, and issue #19 asks it to draw one line in
+    particular: **nothing to seal is a success**. Most of the week no round is inside its window,
+    and until upcoming Premier League Fixtures have a confirmed source that is every fire there
+    will ever be. A loop that exits non-zero twice a week for a season teaches its owner to ignore
+    it, and the next thing it ignores is a real failure.
+
+    So :class:`~epl.live.upcoming.NothingToSeal` is 0, and every other refusal is 1 — a rolling
+    file that changed shape, a stale :data:`epl.windows.LIVE_SEASON`, a round written but not
+    committed, and a round committed but not pushed. The last two are loud for the same reason: an
+    unproven sealed file is indistinguishable on disk from a proven one (ADR 0005).
+    """
     matches = match_table(matches_path)
     now = clock()
     try:
         fixtures = _rolling(matches, cached=cached)
         chosen = upcoming.next_round(fixtures, now=now)
+    except upcoming.NothingToSeal as quiet:
+        print(quiet)
+        return 0
     except upcoming.LiveError as refused:
         print(refused)
         return 1
@@ -188,26 +227,51 @@ def _seal(
     # round is already sealed, and the second run must leave it exactly as it was. Asked of the
     # store rather than caught from `seal`, so that "nothing to do" cannot come to mean "some other
     # LedgerError whose message happened to read the same way".
+    #
+    # It still pushes. A second fire has nothing to write, and pushing is then the whole of what is
+    # left for it to do — which is what makes the retry worth scheduling at all, since the run that
+    # sealed the round is exactly the run that may have been unable to reach the network.
     if store.is_sealed(chosen.prediction_round) and not supersede:
         print(f"{chosen.prediction_round} is already sealed — nothing to do")
         print("  a genuine correction goes in with --supersede (ADR 0005)")
-        return 0
+    else:
+        try:
+            sealed = seal.run(
+                chosen, Corpus(matches), now=now, supersede=supersede, commit=commit
+            )
+        except ledger.LedgerError as refused:
+            print(refused)
+            return 1
 
-    try:
-        sealed = seal.run(
-            chosen, Corpus(matches), now=now, supersede=supersede, commit=commit
-        )
-    except ledger.LedgerError as refused:
-        print(refused)
-        return 1
+        print(sealed.describe())
+        if sealed.silent:
+            print(f"silent (cover none of this round): {', '.join(sealed.silent)}")
+            print("  a Pundit cannot be sealed at all — see epl.pundits.live and issue #16")
+        if commit and sealed.commit is None:
+            print("WARNING: the round was written but not committed, so nothing yet proves when.")
+            return 1
 
-    print(sealed.describe())
-    if sealed.silent:
-        print(f"silent (cover none of this round): {', '.join(sealed.silent)}")
-        print("  a Pundit cannot be sealed at all — see epl.pundits.live and issue #16")
-    if commit and sealed.commit is None:
-        print("WARNING: the round was written but not committed, so nothing yet proves when.")
+    # One decision, one place. Both arms above reach here — the round was sealed just now, or it
+    # was sealed by an earlier fire — and in both cases pushing is what is left to do. Written as a
+    # single tail rather than a return in each arm, because two copies of "and then push" are two
+    # things that can drift apart, and the one that stopped pushing would be silent about it.
+    return _push() if push else 0
+
+
+def _push() -> int:
+    """Push the branch, and report a failure as loudly as an uncommitted seal.
+
+    A commit on the machine that made it proves when the round was written to anyone who can reach
+    that machine. Once the loop runs somewhere else — the Pi this schedule was built for — that is
+    nobody, so the round is not evidence until it has left. Pushing again when there is nothing to
+    push costs a network round trip and succeeds, which is what makes it safe to do on every fire.
+    """
+    landed = store.push()
+    if landed is None:
+        print("WARNING: the round is committed here and NOT PUSHED, so it proves nothing offsite.")
+        print("  check the remote and the credentials; the next fire of the loop will retry")
         return 1
+    print(f"pushed to {landed}")
     return 0
 
 

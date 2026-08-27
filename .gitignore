@@ -3,6 +3,11 @@
 .env.*
 !.env.example
 
+# The unattended loop's own log and lock, written on whichever machine runs the schedule
+# (deploy/run_live.sh, issue #19). Machine-local runtime, regenerable, and never evidence — the
+# evidence a scheduled run produces is the committed round under outputs/live/.
+deploy/logs/
+
 # Raw cache — byte-identical copies of upstream files, re-fetchable, never edited.
 # Not committed: large, and the whole point is that it mirrors an external source.
 data/raw/

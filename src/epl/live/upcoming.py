@@ -64,6 +64,24 @@ class LiveError(Exception):
     """The upcoming Prediction Round could not be identified, so nothing may be sealed."""
 
 
+class NothingToSeal(LiveError):
+    """There is no round to seal at this moment, and nothing is wrong.
+
+    The distinction a schedule needs and a person does not. Run by hand on a Friday afternoon, both
+    of :func:`next_round`'s refusals are read by somebody who then decides what they mean. Run twice
+    a week by cron for a season, they have to decide it themselves — because "no round is inside its
+    window" is most of the week, and "the rolling file held no Premier League row" has so far been
+    *every* fire there has ever been (docs/DECISIONS.md, "Measured at stage 13"). A loop that exits
+    non-zero on those is a loop whose failures nobody reads by November, which is the failure
+    issue #19's fourth criterion is written against.
+
+    Everything else stays a plain :class:`LiveError` and stays loud: a rolling file that changed
+    shape, and a :data:`epl.windows.LIVE_SEASON` that has gone stale in either direction. Those are
+    not quiet Tuesdays — the second is the loop about to stamp Fixtures with the wrong Season — and
+    telling them apart is this class's whole job.
+    """
+
+
 @dataclass(frozen=True)
 class PredictionRound:
     """One Prediction Round that can be sealed right now, and the Fixtures it holds.
@@ -177,15 +195,16 @@ def next_round(fixtures: pd.DataFrame, *, now: pd.Timestamp) -> PredictionRound:
     consecutive Tuesdays and Fridays, so a later round's window opens after an earlier round's
     first kickoff has closed it.
 
-    Raises :class:`LiveError` rather than returning ``None``. Nothing to seal is a normal outcome
-    of a weekly loop — most of the week is not inside anybody's window — and it is also what a
-    rolling file with no Premier League rows in it looks like. Those two must be told apart by a
-    reader, so the complaint carries :func:`rounds`.
+    Raises :class:`NothingToSeal` rather than returning ``None``. Nothing to seal is a normal
+    outcome of a weekly loop — most of the week is not inside anybody's window — and it is also what
+    a rolling file with no Premier League rows in it looks like. Those two must be told apart by a
+    reader, so the complaint carries :func:`rounds`; neither of them needs anybody, which is why
+    they share an exception a schedule can treat as success.
     """
     table = rounds(fixtures, now=now)
     open_now = table.loc[table["status"] == SEALABLE] if not table.empty else table
     if open_now.empty:
-        raise LiveError(_nothing_sealable(table, now))
+        raise NothingToSeal(_nothing_sealable(table, now))
 
     chosen = str(open_now.iloc[0]["prediction_round"])
     assigned = assign_rounds(fixtures)
@@ -224,6 +243,7 @@ __all__ = [
     "ROUND_STATUS_COLUMNS",
     "SEALABLE",
     "LiveError",
+    "NothingToSeal",
     "PredictionRound",
     "next_round",
     "rounds",

@@ -171,6 +171,8 @@ src/epl/live/upcoming.py   the rolling fixtures file -> the one round that can b
 src/epl/live/seal.py       every registered Predictor over that round, sealed and committed
 outputs/live_scoreboard.csv  the Season in progress, scored on its own board; gitignored
 src/epl/v2/             the deferred features, written down rather than built — no code runs here
+deploy/                 the schedule: the image, the compose file, the cron wrapper, the crontab
+deploy/logs/            what an unattended run left behind; machine-local, gitignored
 ```
 
 Three modules are called `live` and they are different things: `epl.ledger.live` is the sealed
@@ -349,7 +351,9 @@ timestamp inside a file, which anyone could type — is the proof of when it exi
 ```
 python -m epl.live upcoming  # what the rolling fixtures file holds, and what could be sealed
 python -m epl.live seal      # predict the upcoming round, write it to outputs/live/, commit it
+python -m epl.live seal --push       # and push it, which is what makes it evidence off this machine
 python -m epl.live score     # ingest results, then score what has been sealed
+deploy/run_live.sh seal --push       # the same, in the container cron fires (deploy/README.md)
 ```
 
 **A round may be sealed only inside its own window**: at or after its As-Of Instant, and strictly
@@ -379,10 +383,25 @@ week; `outputs/live_scoreboard.csv` is where the live record accumulates. `score
 Season from upstream and rebuilds the match table itself, so scoring a played round is one command
 and not three.
 
-**The loop is schedulable and is deliberately not scheduled.** Both write commands are idempotent
-inside a round, which is what a cron entry or a workflow needs. None is committed here, for two
-reasons: there is nothing to seal yet (see below), and a schedule that fetches upstream and pushes
-commits to this repository is a decision for whoever owns it rather than a default.
+**The loop runs on a schedule, on a Raspberry Pi, in a container** — `deploy/`, issue #19. The Pi's
+crontab fires `seal --push` at 16:00 and again at 18:30 UK on Tuesdays and Fridays, and `score` at
+06:00 on the same days. 16:00 is after Football-Data samples the afternoon's odds and before a 19:45
+kickoff; 18:30 is a retry, and it is free because sealing is idempotent inside a round.
+
+**The exit code is the whole interface, and its one important line is that nothing to seal is a
+success.** No round is inside its window most of the week, and until upcoming Fixtures have a source
+it is *every* fire — so a loop that went red twice a week would teach its owner to ignore it.
+`epl.live.upcoming.NothingToSeal` separates the two silences that need nobody from the refusals that
+do; a round sealed but not committed, or committed but not pushed, exits 1 and says so, because the
+file on disk looks identical either way.
+
+**The push is deliberate and is recorded as such.** A commit proves *when* to anyone who can reach
+the machine holding it, and on a Pi in a cupboard that is nobody — so an unattended loop that does
+not push has not finished sealing anything. It is opt-in (`--push`), over a deploy key. Actions was
+weighed and rejected: it would re-fetch the whole raw cache twice a week forever, because
+`score` rebuilds the match table from all 108 files and the cache is gitignored. The price accepted
+in exchange is that **a round whose window passes while the Pi is off is lost** — open risk 6.
+See docs/DECISIONS.md, "The schedule, and where it runs".
 
 ### The input is the part that is not proven
 
@@ -394,20 +413,31 @@ and **on every fetch so far it has held none**:
 |---|---|---|---|
 | 2026-08-21 06:33 UTC — 2026/27 round 1 kicked off that evening | not recorded | 3 | **0** |
 | 2026-08-27 06:12 UTC — the day before round 2 | Tue 25 Aug 09:59 GMT | 5 | **0** |
+| 2026-08-27 14:21 UTC — same day, eight hours later | Tue 25 Aug 09:59 GMT | 5 | **0** |
 
-Both times the file held only Fixtures dated on or before the day it was generated — one League One
-tie and two Spanish on the first, one National League tie and four Spanish on the second — and the
+Every time, the file held only Fixtures dated on or before the day it was generated — one League One
+tie and two Spanish on the first, one National League tie and four Spanish on the other two — and the
 second was already two days stale. So the file is regenerated irregularly and its forward horizon at
 generation time is a couple of days, which is shorter than a Prediction Round's own window.
+
+The third fetch came back **byte-identical** to the second, eight hours later on the eve of a round:
+same md5, same `Last-Modified`. That rules out the hopeful reading of the first two — a fetch timed
+later in the day would not have caught a fresher batch, because upstream had not written one in two
+and a half days.
 
 The first fetch's `E2` row is worth noticing: this is not a file that omits English football. It has
 carried an English tier this project ingests. It has never been seen carrying the one tier this
 project predicts.
 
-This is issue #17's open risk 2, and it is **documented rather than closed**. Two fetches are not
+This is issue #17's open risk 2, and it is **documented rather than closed**. Three fetches are not
 proof that a Premier League row never appears; they are proof that one has not been seen yet, and
 that nothing in this project should assume one will. `python -m epl.live upcoming` is what answers the
 question on any given day, and it answers it without writing anything.
+
+Issue #19's schedule now asks it twice a week, which changes who is watching rather than what the
+answer is. A fire that finds no Premier League row is a quiet success by design, so the evidence
+accumulates in `deploy/logs/live_loop.log` — and **nothing will announce the day the answer
+changes.** The loop will simply start sealing rounds.
 
 The consequence reaches [Deferred to v2](#deferred-to-v2): the reason given for not needing an
 API-Football client is that "`fixtures.csv` already carries upcoming Fixtures with the Market Line".
