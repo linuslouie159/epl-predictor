@@ -1,0 +1,53 @@
+# What the image build does NOT need (deploy/Dockerfile, issue #19).
+#
+# The Dockerfile copies three things — environment.yml, pyproject.toml and src/ — but the whole
+# repository is sent to the daemon as the build context regardless of what is then COPYed. Without
+# this file that is 71 MB to move ~2 MB of source, and it is re-sent on every build. On the Pi that
+# is the difference between a context transfer nobody notices and one they do.
+#
+# The correctness half matters more than the speed half: the context is hashed, so a `data/raw/`
+# refresh or a mypy run would invalidate the build cache and re-solve conda for reasons that have
+# nothing to do with the image.
+#
+# Everything here is either regenerable, machine-local, or already inside the container by way of
+# the bind mount at run time (deploy/docker-compose.yml). Nothing here is evidence.
+
+# The corpus. Fetched onto the Pi once and bind-mounted; never baked into an image, where it would
+# be a stale copy of something that grows weekly.
+data/
+
+# Everything the pipeline publishes, including outputs/live/ — which IS evidence, and is exactly
+# why it belongs in the mounted checkout rather than in a layer.
+outputs/
+
+# Tool caches. 31 MB of mypy alone, and the reason a `mypy` run would otherwise bust the cache.
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+
+# History. The loop needs a repository at run time and gets one from the bind mount; a copy inside
+# the image would be a second, divergent one.
+.git/
+.gitignore
+
+# Tests, docs and the deployment files themselves. The image is the environment, not the project —
+# the code it runs arrives on the mount. deploy/ is excluded via the exception below so that the
+# Dockerfile is still readable by the daemon when it is named with -f.
+tests/
+docs/
+*.md
+
+# Local environments and editor state.
+.venv/
+venv/
+.conda/
+.vscode/
+.idea/
+
+# Secrets, in case one is ever written here by hand. .env is gitignored too; this is the belt to
+# that brace, because a file that never reaches the daemon cannot end up in a layer.
+.env
+.env.*
+!.env.example

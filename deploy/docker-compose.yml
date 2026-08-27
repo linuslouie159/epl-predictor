@@ -43,6 +43,11 @@ services:
     # Run as the user who owns the clone, so what the loop writes is not root-owned and the owner
     # can still `git push` by hand. 1000:1000 is the first account on Raspberry Pi OS; override in
     # deploy/.env if the clone belongs to somebody else (`id -u` and `id -g`).
+    #
+    # This uid must also own the `.ssh` directory mounted below. ssh refuses a private key it
+    # considers badly owned, so a PUID that does not match the key's owner fails the push with a
+    # permissions complaint rather than a mount error — which reads like the wrong problem. One
+    # user owns the clone, the key and this setting, or none of it works.
     user: "${PUID:-1000}:${PGID:-1000}"
 
     environment:
