@@ -368,13 +368,14 @@ new Season — which is why the separation is free today and no reason to rely o
 **The code is built and tested end to end; its input is not proven.** Open risk 2 is **documented
 rather than closed**, and this is the thing to know before planning anything live:
 
-- **`fixtures.csv` has never been seen carrying a Premier League row.** Two fetches — 21 Aug 2026
-  (the evening round one kicked off) and 27 Aug 2026 (the day before round two) — held 3 and 5 rows
-  and **no E0**. The second was two days stale: `Last-Modified` was Tue 25 Aug 09:59 GMT, and even
-  that batch, generated three days before a Premier League round, carried none. Its forward horizon
-  at generation is about two days, which is shorter than a Prediction Round's own window.
+- **`fixtures.csv` has never been seen carrying a Premier League row.** Three fetches — 21 Aug 2026
+  (the evening round one kicked off), then twice on 27 Aug 2026, the day before round two — held 3,
+  5 and 5 rows and **no E0**. The last two were two days stale by `Last-Modified` (Tue 25 Aug 09:59
+  GMT) and were **byte-identical to each other** eight hours apart, so upstream had not regenerated
+  the file across a matchday: a fetch timed later in the day would not have caught a fresher batch.
+  Its forward horizon at generation is about two days, shorter than a Prediction Round's own window.
 - **It is not that the file omits English football.** The first fetch carried an `E2` tie. It has
-  simply never been seen carrying the one tier this project predicts. Two fetches cannot prove a
+  simply never been seen carrying the one tier this project predicts. Three fetches cannot prove a
   negative, which is why this is measured rather than closed — `python -m epl.live upcoming` asks the
   question on any given day and writes nothing.
 - **This puts issue #18's premise in doubt.** API-Football was deferred *because* "`fixtures.csv`

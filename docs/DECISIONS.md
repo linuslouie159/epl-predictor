@@ -1277,7 +1277,7 @@ So `fixtures.csv` is regenerated irregularly, and its forward horizon at the mom
 a couple of days — shorter than a Prediction Round's own sealing window. **No Premier League row has
 been seen in it yet.**
 
-Two fetches are not proof that one never appears, and this is recorded as *measured and documented*
+Three fetches are not proof that one never appears, and this is recorded as *measured and documented*
 rather than closed. `python -m epl.live upcoming` is what answers the question on any given day, writes
 nothing, and distinguishes the two silences that matter: "no round is inside its window right now"
 and "the file held no Premier League Fixture at all".

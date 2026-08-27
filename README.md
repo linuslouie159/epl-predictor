@@ -121,7 +121,7 @@ check, and `tests/v2/test_stubs_are_unreachable.py` checks it: deleting the dire
 import and move no number. Each carries its entry price as a `WHAT_IT_NEEDS` tuple, because the
 sentence a stub loses first is the one saying what it would take to pick it up.
 
-`api_football.py` is the live one. It holds the two fetches that failed to find a Premier League row
+`api_football.py` is the live one. It holds the three fetches that failed to find a Premier League row
 (`FETCHES_MEASURED`), the count that decides the question (`PREMIER_LEAGUE_ROWS_SEEN`, currently 0),
 and the conditions that would revive the client.
 
@@ -172,6 +172,7 @@ src/epl/live/seal.py       every registered Predictor over that round, sealed an
 outputs/live_scoreboard.csv  the Season in progress, scored on its own board; gitignored
 src/epl/v2/             the deferred features, written down rather than built — no code runs here
 deploy/                 the schedule: the image, the compose file, the cron wrapper, the crontab
+deploy/SETUP.md         the Pi runbook: Docker, deploy key, image, cache, smoke test, crontab
 deploy/logs/            what an unattended run left behind; machine-local, gitignored
 ```
 

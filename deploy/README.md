@@ -51,92 +51,14 @@ directory publishes nothing shaped for it.
 
 ## Setting it up
 
-### 1. Clone, and give the clone an identity
+**[SETUP.md](./SETUP.md)** — the runbook, from a Pi with nothing on it to an installed
+schedule. Docker, a deploy key, the image, the raw cache, a smoke test, and the crontab.
 
-A sealed round is committed, and a commit needs a name. Set it on the clone rather than globally,
-so the commit says who owns the Pi rather than what the container image is:
-
-```bash
-git clone git@github.com:linuslouie159/epl-predictor.git ~/epl-predictor
-cd ~/epl-predictor
-git config user.name  "Your Name"
-git config user.email "you@example.com"
-```
-
-The remote must be **SSH**, not HTTPS: the loop pushes unattended and cannot be handed a password.
-Add a deploy key with write access to the repository, and check it before going further:
-
-```bash
-ssh -T git@github.com          # should greet you by name
-git push                       # should be a no-op, not a prompt
-```
-
-**Both of those matter, and the first one matters for a reason that is not obvious.** The container
-mounts `~/.ssh` **read-only**, so it cannot write `known_hosts` — which means it cannot accept
-github.com's host key for the first time. Running `ssh -T git@github.com` by hand is what puts that
-entry there. Skip it and the first scheduled push fails host key verification, and the loop reports
-`NOT PUSHED` for what looks like a credentials problem and is not.
-
-### 2. Build the image
-
-This comes before the ingest below, because the ingest runs *inside* it. Natively on the Pi:
-
-```bash
-docker build -f deploy/Dockerfile -t epl-predictor:live .
-```
-
-The conda solve is the slow half of that, and it is slow on a Pi. Cross-building on a desktop is
-usually the better trade:
-
-```bash
-docker buildx build --platform linux/arm64 -f deploy/Dockerfile -t epl-predictor:live --load .
-```
-
-> **This image has never been built.** It was written on a machine with no running Docker, so it is
-> checked statically only — `docker compose config` parses it, and the `sed` that strips the
-> editable install is guarded by a `grep` in the build itself, so a moved pip section fails loudly
-> rather than silently. The conda solve on aarch64 is the step with no evidence behind it. If it
-> fails, that is the first place to look and not a sign the rest is wrong.
-
-### 3. Tell compose who owns the clone
-
-Do this before the ingest too, or the cache it writes will be owned by the wrong user and the loop
-will not be able to refresh it later. Only needed if the clone does not belong to uid 1000, which is
-the first account on Raspberry Pi OS: copy `deploy/.env.example` to `deploy/.env` and fill in `id -u`
-and `id -g`.
-
-### 4. Seed the data the loop needs
-
-`score` rebuilds the match table from the whole raw cache, and the cache is gitignored — so it does
-not arrive with the clone and has to be fetched onto the Pi once. 108 files, and it takes a while:
-
-```bash
-docker compose -f deploy/docker-compose.yml run --rm --entrypoint python live -m epl.ingest fetch
-docker compose -f deploy/docker-compose.yml run --rm --entrypoint python live -m epl.ingest build
-```
-
-Check it landed before going on — `data/processed/matches.csv` should exist and hold about 52,700
-matches.
-
-Only needed if the clone does not belong to uid 1000, which is the first account on Raspberry Pi
-OS. Copy `deploy/.env.example` to `deploy/.env` and fill in `id -u` and `id -g`.
-
-### 5. Check it end to end before scheduling anything
-
-```bash
-deploy/run_live.sh upcoming        # fetches, reports, writes nothing
-tail -n 40 deploy/logs/live_loop.log
-```
-
-`upcoming` is the safe one — it is the whole of `seal`'s work up to the point where `seal` would
-write. If that reports the rolling file and exits 0, the deployment works.
-
-### 6. Install the schedule
-
-```bash
-sed "s|__ROOT__|$PWD|g" deploy/crontab > /tmp/epl.cron
-crontab -l > /tmp/current 2>/dev/null; cat /tmp/epl.cron >> /tmp/current; crontab /tmp/current
-```
+It is a separate file rather than a section here because the two are read at different
+moments and by different people. That one is followed once, at the Pi, with a terminal open.
+This one is read afterwards, when something has gone wrong or when somebody is deciding
+whether to change how any of it works. Keeping the steps in one place also means there is
+only one copy of them to keep true.
 
 ## What each exit code means
 
