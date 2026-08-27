@@ -177,6 +177,12 @@ Do not "fix" these without reading the linked ADR first:
   right for the backfill and wrong for #16. `live.build` filters and hands the rest to the frozen
   builder, so there is one implementation of what a listing becomes. Measured, `unplaced` is empty
   on every live page seen — which is why anything in it is worth reading.
+- **`src/epl/v2/` is a package nothing imports, and that is its whole specification.** Three
+  deferred features written down instead of built (decision 12): prose, named constants, no
+  functions and no classes. It is Python rather than Markdown so that "the pipeline does not import
+  it" is a thing a test can check, and `epl.v2.STUBS` names its members as strings so that importing
+  the package executes nothing. Do not wire it in, do not add a helper to it, and do not collapse it
+  into a docs page.
 
 ## Never do this
 
@@ -359,6 +365,29 @@ rather than closed**, and this is the thing to know before planning anything liv
   inside a round, which is all a cron entry or a workflow needs; none is committed. There is nothing
   to seal yet, and a schedule that fetches upstream and pushes commits to this repository is the
   repository owner's call rather than a default.
+
+**Stage 14 is built**: the deferred-v2 stubs (`src/epl/v2/`, issue #18) — the XGBoost/ML layer, the
+Golden Boot player model and the API-Football client, written down instead of built (decision 12).
+Prose and named constants, no functions and no classes, imported by nothing. Deleting the directory
+would break no import and move no number, and `tests/v2/test_stubs_are_unreachable.py` is what keeps
+that true rather than assumed.
+
+Three things about stage 14 worth knowing:
+
+- **They are Python modules and not a docs page, because criterion 5 is only checkable that way.**
+  "None of the stubs is imported or executed by the pipeline" is satisfied trivially and
+  unfalsifiably by Markdown; under `src/epl/v2/` it is satisfied by a test that walks every import
+  in `src/epl`. That test reads `from epl import v2` as well as `import epl.v2` — recording only the
+  module half of a `from X import Y` would let the most natural spelling of the violation through
+  the one test that exists to catch it.
+- **`epl.v2.STUBS` names its members as strings and does not import them.** If `__init__` imported
+  the three, then `import epl.v2` would execute all three, and the guarantee would rest on nothing
+  importing the *package* either — a weaker claim and a harder one to check. Do not "tidy" it into
+  imports.
+- **`api_football.py` records a measurement, not a rationale.** Its stated reason for deferral is
+  the premise stage 13 could not confirm, so it carries `FETCHES_MEASURED`, `PREMIER_LEAGUE_ROWS_SEEN
+  = 0` and `WHAT_WOULD_REVIVE_IT` as data. A third fetch of `fixtures.csv` is an append to a tuple.
+  Update it when `python -m epl.live upcoming` is run on a Friday, whichever way it comes out.
 
 Seven things about stage 11 worth knowing before building on it:
 
@@ -617,20 +646,18 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Every ticket in the tracker is now closed except #18.** The modelling stages are done, the live
-loop is built, and what is left is not a stage — it is one unproven input and three issues worth
-filing.
+**Every ticket in the tracker is now built, #18 included.** The modelling stages are done, the live
+loop is built, the deferred features are written down, and what is left is not a stage — it is one
+unproven input and three issues worth filing.
 
 **The one thing to re-check before anything else**: run `python -m epl.live upcoming` on a Friday
 afternoon of a Premier League round. If `fixtures.csv` carries E0 rows, the live half works today
 and `seal` will write and commit the round. If it does not, upcoming Premier League Fixtures have no
 confirmed source and that is the blocker for everything live — including the weekly Season
-Projection. Whatever it says, record the date and the result beside the two in docs/DECISIONS.md.
-
-**Ready now: issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). Unblocked
-since stage 1, needs nothing from the ledger, and is small. It is also no longer purely
-documentation: the API-Football stub's stated premise — that `fixtures.csv` makes it unnecessary —
-is the premise stage 13 could not confirm, so the stub records a measurement.
+Projection. Whatever it says, record the date and the result in three places: beside the two fetches
+in docs/DECISIONS.md, in `epl.v2.api_football.FETCHES_MEASURED`, and — if a Premier League row ever
+appears — in `PREMIER_LEAGUE_ROWS_SEEN`, which is the number that decides whether that stub stays a
+stub.
 
 **Three issues worth filing, none of them in scope anywhere yet:**
 

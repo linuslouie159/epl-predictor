@@ -18,7 +18,7 @@ an ADR in [adr/](./adr/); the rest are recorded only here.
 | 9 | Split ledger: regenerable `outputs/backtest/`, sealed `outputs/live/` | [0005](./adr/0005-split-prediction-ledger.md) |
 | 10 | Elo runs across E0–E3 so promoted Clubs arrive with earned ratings | [0004](./adr/0004-rate-the-whole-pyramid.md) |
 | 11 | Ordered logit for Outcomes, behind a shared isotonic calibration layer built now | [0006](./adr/0006-ordered-logit-with-shared-calibration.md) |
-| 12 | v1 = stages 1–8. Deferred with written stubs: XGBoost/ML, Golden Boot, API-Football | — |
+| 12 | v1 = stages 1–8. Deferred with written stubs: XGBoost/ML, Golden Boot, API-Football — written at stage 14 as `src/epl/v2/`, prose and constants, imported by nothing | — |
 | 13 | 2026/27 gameweek 1 (21 Aug 2026) deliberately not chased; backtest power matters more than 10 live matches. **Superseded at stage 13**: the live loop cannot predict a Season it cannot see or score what it sealed, so 2026/27 is now ingested — as a third span outside both Windows, which is the part that mattered | [0010](./adr/0010-live-season-outside-both-windows.md) |
 | 14 | Season Projections use a Bayesian posterior. Within-season strength drift is **not** modelled — measured at zero | [0007](./adr/0007-mle-for-matches-bayesian-for-projections.md) |
 | 15 | Dixon-Coles: MLE at all 1,189 Prediction Rounds, Bayesian only where a Season Projection is produced | [0007](./adr/0007-mle-for-matches-bayesian-for-projections.md) |
@@ -1280,6 +1280,36 @@ The consequence reaches issue #18. The stated reason for deferring an API-Footba
 and that premise is exactly what is now in doubt. The stub should record the measurement, not the
 assumption.
 
+**Stage 14 wrote it that way.** `epl.v2.api_football` carries the table above as `FETCHES_MEASURED`,
+the count that settles the question as `PREMIER_LEAGUE_ROWS_SEEN` — currently `0` — and the
+conditions that would revive the client as `WHAT_WOULD_REVIVE_IT`. A third fetch is an append to a
+tuple rather than a rewrite of a paragraph, which is the reason the fetches are data there and prose
+here.
+
+### Added at stage 14 (the deferred-v2 stubs, issue #18)
+
+**The stubs are Python modules, not a docs page, and the reason is testability.** Issue #18's fifth
+acceptance criterion is that none of them is imported or executed by the pipeline. A Markdown file
+satisfies that trivially and unfalsifiably; a module under `src/epl/v2/` satisfies it in a way
+`tests/v2/test_stubs_are_unreachable.py` can check by walking every import in `src/epl`. Deleting the
+directory breaks no import and moves no number, and that is now a test rather than an intention.
+
+**Each stub carries its entry price as a `WHAT_IT_NEEDS` tuple rather than a closing paragraph.**
+Criterion 4 asks that a stub say what it needs in order to be picked up, not merely that it was
+deferred — and that is precisely the sentence a docstring loses first, because losing it leaves prose
+that still reads fine. A named constant a test holds onto cannot be edited away quietly.
+
+**A stub defines no function and no class, and that is checked too.** Decision 12 says three stubs
+and *no implementation*. The failure mode is not someone building the ML layer by accident; it is a
+helper added "while I am in there", then an import, and then a deferred feature the pipeline depends
+on half of. `test_it_defines_no_function_and_no_class` is where that stops.
+
+**The import detector reads `from epl import v2` as well as `import epl.v2`.** Recording only the
+module half of a `from X import Y` would have let the most natural spelling of the violation through
+the one test that exists to catch it. `tests/metrics/test_module_contract.py` has the same shape and
+does not need the same care, because no module in `epl.metrics`' blast radius is a submodule of the
+package being guarded — but the two should not drift, and this note is why they differ.
+
 ### What stage 13 deliberately did not build
 
 **A live Season Projection.** CLAUDE.md expected #17 to turn the projection weekly, via
@@ -1311,7 +1341,7 @@ afterwards would not be a track record.
 ## Open risks
 
 1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.
-2. **`fixtures.csv` has never been seen carrying a Premier League row, and that is now the only unproven link in the live path.** Everything else it named closed at stage 13. `mmz4281/2627/E0.csv` exists and parses, so the results half is proven. The corpus no longer stops at 2025/26: `epl.windows.LAST_SEASON` moved to 2026, deliberately, and `LIVE_SEASON` is a third span that is ingested but in neither Window. `epl.live` seals a round, refuses to rewrite one, supersedes one under a new As-Of Instant, and scores retrospectively — all tested end to end against the real corpus and the real registry. What remains is the input: two fetches (21 and 27 Aug 2026) found **no E0 rows**, a forward horizon of about two days at the moment of generation, and a two-day-stale file three days before a Premier League round. The file has carried an English lower tier, so it is not that it omits English football. See "The live loop, and the input it is still waiting for". **This is measured and documented rather than closed**, because two fetches cannot prove a negative — and `python -m epl.live upcoming` is what asks the question on any given day, writing nothing. It also puts issue #18's premise in doubt: API-Football was deferred *because* `fixtures.csv` carries upcoming Fixtures with the Market Line. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — now asked of the Pundit source too, where it has already failed once correctly (Coventry and Hull).
+2. **`fixtures.csv` has never been seen carrying a Premier League row, and that is now the only unproven link in the live path.** Everything else it named closed at stage 13. `mmz4281/2627/E0.csv` exists and parses, so the results half is proven. The corpus no longer stops at 2025/26: `epl.windows.LAST_SEASON` moved to 2026, deliberately, and `LIVE_SEASON` is a third span that is ingested but in neither Window. `epl.live` seals a round, refuses to rewrite one, supersedes one under a new As-Of Instant, and scores retrospectively — all tested end to end against the real corpus and the real registry. What remains is the input: two fetches (21 and 27 Aug 2026) found **no E0 rows**, a forward horizon of about two days at the moment of generation, and a two-day-stale file three days before a Premier League round. The file has carried an English lower tier, so it is not that it omits English football. See "The live loop, and the input it is still waiting for". **This is measured and documented rather than closed**, because two fetches cannot prove a negative — and `python -m epl.live upcoming` is what asks the question on any given day, writing nothing. It also puts issue #18's premise in doubt: API-Football was deferred *because* `fixtures.csv` carries upcoming Fixtures with the Market Line — and stage 14 closed #18 by writing that doubt into `epl.v2.api_football` as data (`FETCHES_MEASURED`, `PREMIER_LEAGUE_ROWS_SEEN = 0`, `WHAT_WOULD_REVIVE_IT`) rather than by resolving it, which only a Friday fetch can do. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — now asked of the Pundit source too, where it has already failed once correctly (Coventry and Hull).
 3. ~~**MyFootballFacts parseability is unverified.** Content correctness was confirmed — a 2025/26 result cross-checked exactly against Football-Data — but the HTML has not been parsed across all nine season pages.~~ **Closed at stage 7.** All nine parse, yielding **3,408 calls** of a possible 3,420, and the cross-check went far past the one row the ticket asked for: the page prints the real score beside every call, and **3,402 of the 3,406 that carry one match Football-Data**, with the four exceptions named above. The HTML is hand-maintained and reads like it — annotated names, six misspellings, two Scorelines dropped inside a Club's name, and which table holds the predictions moving between pages — so the parser recognises a call by its shape rather than by where it sits, and refuses a page that yields fewer than 360 or more than 420. `tests/pundits/test_over_the_corpus.py` re-derives all of it.
 4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.

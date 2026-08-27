@@ -115,6 +115,16 @@ stub explaining what it would do and what it needs. API-Football was deferred be
 already carries upcoming Fixtures with the Market Line, free and unauthenticated — a premise stage 13
 measured and could not confirm. See [The live loop](#the-input-is-the-part-that-is-not-proven).
 
+The stubs are in **`src/epl/v2/`** — prose and named constants, no implementation. They are Python
+modules rather than a docs page so that "nothing in the pipeline imports one" is a thing a test can
+check, and `tests/v2/test_stubs_are_unreachable.py` checks it: deleting the directory would break no
+import and move no number. Each carries its entry price as a `WHAT_IT_NEEDS` tuple, because the
+sentence a stub loses first is the one saying what it would take to pick it up.
+
+`api_football.py` is the live one. It holds the two fetches that failed to find a Premier League row
+(`FETCHES_MEASURED`), the count that decides the question (`PREMIER_LEAGUE_ROWS_SEEN`, currently 0),
+and the conditions that would revive the client.
+
 ## Layout
 
 ```
@@ -160,6 +170,7 @@ src/epl/live/           the live loop: the upcoming round, the seal, the retrosp
 src/epl/live/upcoming.py   the rolling fixtures file -> the one round that can be sealed now
 src/epl/live/seal.py       every registered Predictor over that round, sealed and committed
 outputs/live_scoreboard.csv  the Season in progress, scored on its own board; gitignored
+src/epl/v2/             the deferred features, written down rather than built — no code runs here
 ```
 
 Three modules are called `live` and they are different things: `epl.ledger.live` is the sealed

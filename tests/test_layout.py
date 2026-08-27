@@ -22,6 +22,12 @@ MODULES = (
     "epl.simulate",
     "epl.ledger",
     "epl.live",
+    # In the README's layout and in no build order: the deferred features, written down rather than
+    # built (decision 12, issue #18). It is here because the README documents it and this list is
+    # what keeps the two in step — and because "importing it costs nothing" is a claim worth
+    # checking in a fresh interpreter like any other. What it must *not* be is imported by the
+    # pipeline, and tests/v2/test_stubs_are_unreachable.py is what checks that.
+    "epl.v2",
 )
 
 #: Single-file modules that every stage imports rather than a stage of their own: three scope which
