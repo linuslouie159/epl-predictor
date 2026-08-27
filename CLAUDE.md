@@ -706,9 +706,26 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Every ticket through #19 is built.** The modelling stages are done, the live loop is built, the
-deferred features are written down, and the schedule that runs the loop is committed under `deploy/`.
-What is left is one unproven input and three issues worth filing.
+**Every ticket through #19 is built, and #21 is the next one to do.** The modelling stages are done,
+the live loop is built, the deferred features are written down, and the schedule that runs the loop
+is committed under `deploy/`.
+
+**But `deploy/` has never been executed, and that is the point of #21.** The image has not been
+built on the Pi, no crontab is installed, and nothing has fired. #19's seven acceptance criteria
+were all about code behaviour and all seven were met and verified; a running deployment was never
+among them, and could not have been — the Pi decision was made partway through that ticket, on a
+machine with no running Docker. So the gap between "the schedule is written" and "the schedule
+runs" belongs to #21, whose deliverable is **evidence rather than code**, and whose criteria include
+correcting `deploy/SETUP.md` from what actually happens.
+
+Do #21 before #20. The bot reports on a loop that runs, and half its notifications describe events —
+a round sealed, a round scored, the schedule failing — that cannot happen until one does.
+
+**#21 is blocked on nothing**, unlike most of what is left. It does *not* need a source of upcoming
+Premier League Fixtures: the loop's ordinary answer today is "no row in a tier this project
+predicts, exit 0", and proving that runs unattended on the Pi is the whole of the ticket.
+
+What is left after that is one unproven input and three issues worth filing.
 
 **The schedule was built knowing it will seal nothing, and that is not a contradiction.** #19's
 fourth acceptance criterion names the case by name — "the *only* case until upcoming Fixtures have a
@@ -728,7 +745,8 @@ result in three places: beside the fetch table in docs/DECISIONS.md, in
 `PREMIER_LEAGUE_ROWS_SEEN`, which is the number that decides whether that stub stays a stub. Three
 fetches are recorded there as of 27 Aug 2026 and all three found nothing.
 
-**#20 is filed and open: a Telegram bot** — seal and score notifications, and the board on demand.
+**#20 is filed and open, and is blocked by #21: a Telegram bot** — seal and score notifications,
+and the board on demand.
 Its first acceptance criterion is the gap #19 closed leaving open: the schedule now asks upstream
 twice a week whether `fixtures.csv` carries a Premier League row, and a fire that finds none is a
 quiet success, so *nothing announces the day the answer changes*. A bot is what would. Note the
