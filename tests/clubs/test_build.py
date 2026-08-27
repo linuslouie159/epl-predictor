@@ -39,10 +39,17 @@ class TestMapping:
 
         assert build.PUNDIT_SOURCE == owned_by_the_parser
 
-    def test_the_pundit_spellings_cover_the_clubs_of_nine_premier_league_seasons(self) -> None:
-        """MyFootballFacts publishes 2017/18-2025/26 and no lower tier, and those nine Seasons
-        field 32 Clubs between them. A lower-tier Club here would be a spelling nothing asks for."""
-        assert len(set(build.MYFOOTBALLFACTS.values())) == 32
+    def test_the_pundit_spellings_cover_the_frozen_nine_seasons_and_the_live_one(self) -> None:
+        """MyFootballFacts publishes no lower tier, so every spelling here is a Premier League
+        Club and a lower-tier one would be a spelling nothing asks for.
+
+        The nine frozen Seasons — 2017/18-2025/26 — field 32 Clubs between them. Coventry and Hull
+        are the other two: both were promoted for 2026/27 and appear on the live page, which is the
+        ordinary way a Club arrives at this table (issue #16). The count is asserted rather than
+        the names so that a *third* arriving unnoticed still fails.
+        """
+        assert len(set(build.MYFOOTBALLFACTS.values())) == 34
+        assert {"coventry", "hull"} <= set(build.MYFOOTBALLFACTS.values())
 
     def test_slugs_are_unique(self) -> None:
         slugs = [slug for slug, _ in build.FOOTBALL_DATA.values()]

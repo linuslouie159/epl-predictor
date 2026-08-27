@@ -167,11 +167,18 @@ PUNDIT_SOURCE = "myfootballfacts"
 # MyFootballFacts' spellings -> slug, for the Pundit backfill (issue #11). Premier League Clubs
 # only: the archive covers 2017/18-2025/26, and the site has never published a lower tier.
 #
-# Every one of these was observed in the nine pages rather than derived from a rule, which is why
+# Every one of these was observed in the pages rather than derived from a rule, which is why
 # the six short ones are here. `Wolverhampton W` and `Brighton & Hove Alb` are the source
 # genuinely misspelling a Club, and a spelling is exactly what this table holds. The annotations
 # the pages also carry — a trailing `*`, or `(14.02)` naming a rearranged date — are *not*
 # spellings, and `epl.pundits.myfootballfacts` strips them before it asks for a slug.
+#
+# `Coventry City` and `Hull City` come from the *live* 2026/27 page rather than from the nine
+# frozen ones (issue #16). Both Clubs were promoted into a Premier League the archive had never
+# covered them in, so a table built from the backfill alone could not have held them — which is why
+# `tests/pundits/test_live_upstream.py` asks the Pundit source the same "has a new spelling
+# appeared" question the ingest already asks Football-Data. That check failing is the ordinary way
+# a promoted Club arrives, not a defect.
 MYFOOTBALLFACTS = {
     "AFC Bournemouth": "bournemouth",
     "Arsenal": "arsenal",
@@ -184,10 +191,12 @@ MYFOOTBALLFACTS = {
     "Burnley": "burnley",
     "Cardiff City": "cardiff",
     "Chelsea": "chelsea",
+    "Coventry City": "coventry",
     "Crystal Palace": "crystal_palace",
     "Everton": "everton",
     "Fulham": "fulham",
     "Huddersfield Town": "huddersfield",
+    "Hull City": "hull",
     "Ipswich Town": "ipswich",
     "Leeds United": "leeds",
     "Leicester City": "leicester",

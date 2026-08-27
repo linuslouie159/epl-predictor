@@ -1061,10 +1061,108 @@ six-checkpoint, full-sampler run is the overnight job and the command for it is 
   independent forecasts, so the diagram is a shape rather than a significance test. `validate` prints
   that sentence under every diagram it produces.
 
+## The BBC spike, and why a Pundit cannot be sealed
+
+Added at stage 12 (issue #16), which is a spike: the deliverable is a decision backed by evidence,
+and the evidence changed the question. `epl.pundits.myfootballfacts.discover_pages` is the code that
+survived it, `epl.pundits.live` is the finding written as a module, and `python -m epl.pundits live`
+runs it. Everything below was measured on **27 August 2026**.
+
+**The BBC is reachable, and that is not the blocker.** Open risk 1 recorded `www.bbc.co.uk` as
+unreachable during design. It answers in 0.1 s. The opaque article IDs resolve —
+`/sport/football/articles/cvg0e92ezz4o` is *Premier League opening weekend predictions: Chris Sutton
+v singer Tom Grennan*, published 2025-08-15 — and the page carries both `application/ld+json` and a
+`window.__INITIAL_DATA__` blob, so it is machine-readable rather than something that would have to be
+scraped out of prose. On the technical question the risk asked, the answer is yes.
+
+**The blocker is permission, and it is explicit.** `bbc.co.uk/robots.txt` opens with a plain-English
+statement of the BBC's terms: *"No scraping, crawling, or systematic extraction of content"*, *"No
+creating datasets from BBC content"*, *"No text and data mining"*, and *"No business use without
+permission"*. It then disallows `ClaudeBot`, `Claude-Web` and `anthropic-ai` from the entire site.
+Issue #16 would build a fetcher producing a committed dataset of BBC pundit calls, which is the named
+case twice over. **So the BBC is out** — and this is a better answer than "unreachable" was, because
+it does not change when a network does. Article discovery was therefore not pursued past this point;
+there is no index page, and finding one would not make the terms say anything different.
+
+**MyFootballFacts wins, and permits what the BBC forbids.** Its `robots.txt` is `Allow: /` for
+`ClaudeBot`, `anthropic-ai`, `CCBot` and a dozen other agents, named individually. It also has the
+one thing the BBC lacks: **an index**. That mattered immediately — the archive has now used *four*
+slug conventions in eighteen Seasons, and 2026/27 arrived as
+`chris-sutton-predictions-premier-league-2026-27`, dropping the `for-` its four predecessors carried.
+A URL built from the Season would have 404ed, so `discover_pages` follows the index's own
+`rel="next"` rather than naming or constructing anything.
+
+**The index links eighteen Season pages, and the backfill uses nine.** 2009/10 through 2026/27,
+consecutively. The eight before 2017/18 are Mark Lawrenson calls this project has never scored —
+roughly 3,000 more, on the same source, in the same shape. That is not in scope here and is recorded
+because it is worth an issue rather than a rediscovery.
+
+**The latency, which is what the ticket asked to be stated.** It cannot be measured from a page
+fetched today — a Season page shows what the archive holds *now*, not when each call arrived — so it
+was measured against Wayback Machine snapshots of the 2025/26 page, asking at each snapshot the
+question a Prediction Round asks: *are the next round's calls already published?*
+
+| Snapshot | Calls on page | Next round kicks off | Its Fixtures | Already called |
+|---|---|---|---|---|
+| 2025-08-15 | 10 | same day | 10 | **10** |
+| 2026-02-04 | 240 | 2 days later | 10 | **0** |
+| 2026-03-30 | 309 | 11 days later | 10 | **0** |
+
+The Wayback Machine holds a fourth distinct-content snapshot, 2025-12-21, and it is **left out
+because it is not evidence**: the round it would be measured against had already kicked off the day
+before, so its 10-of-10 says only that the archive records the past, which is the thing not in
+dispute. Four snapshots exist; three can be asked this question. Re-derive the set with
+`https://web.archive.org/cdx/search/cdx?url=myfootballfacts.com/premier-league/all-time-premier-league/predictions/chris-sutton-predictions-for-premier-league-2025-26/&output=json&collapse=digest`
+and fetch each as `https://web.archive.org/web/<timestamp>id_/<url>`.
+
+Only the season opener was ever covered before kickoff, and it is the one round the archive publishes
+in advance. The live 2026/27 page said the same on 27 Aug 2026: one day before the second round, it
+held the first round only, **with every result already filled in**. That is the shape of the whole
+finding — the archive transcribes a matchday *after* it has been played.
+
+**Why none of the BBC evidence is a test, unlike everything else here.** This repo's habit is a
+`--run-network` test that re-checks an upstream fact rather than trusting a note, and
+`tests/pundits/test_live_upstream.py` does exactly that for MyFootballFacts. There is deliberately no
+equivalent for the BBC: a test that fetched BBC pages on every network run would be the automated,
+repeated access their terms refuse, so building one to prove they refuse it would be self-refuting.
+The BBC findings are therefore prose with the URLs and the date they were checked, and
+`bbc.co.uk/robots.txt` is a one-line manual check for anyone who wants to confirm them.
+
+**So a Pundit cannot be part of a Sealed Prediction**, and the reason is worth stating precisely: not
+that the calls do not exist when they are needed — the BBC publishes them days before kickoff — but
+that the only source this project is *permitted* to read has not transcribed them yet. The
+consequence for issue #17 is concrete: the live loop seals the models and the Market Line, and a
+Pundit's column on the three-way board is filled in retrospectively once the archive catches up. Note
+this is a constraint on the live loop only; it takes nothing away from the committed backfill, which
+is nine complete Seasons and is what every Pundit number on the scoreboard already comes from.
+
+**Two things that had to change to make a live page readable at all.** Neither is a workaround:
+
+- **The backfill's size floor cannot apply.** `MIN_CALLS = 360` is right for a complete Season and
+  wrong for every live page there has ever been — the 2026/27 page held ten calls. `epl.pundits.live`
+  lifts the floor and keeps the ceiling, and reconciles against the corpus instead, which is a
+  stronger check than a row count.
+- **A live page brings Club spellings the Alias table cannot have held.** 2026/27 promoted Coventry
+  and Hull into a Premier League the archive had never covered them in, so `Coventry City` and
+  `Hull City` were unknown to `myfootballfacts` and every call on the page refused to resolve. Both
+  are now in `epl.clubs.build.MYFOOTBALLFACTS`, and `tests/pundits/test_live_upstream.py` asks the
+  Pundit source the same "has a new spelling appeared" question the ingest already asks Football-Data.
+  **That check failing is the ordinary way a promoted Club arrives**, not a defect.
+
+**A finding that confirms the freeze, and it was proven by the pipeline rather than asserted.** All
+nine cached pages had drifted from what upstream serves — every one 280–450 bytes different — while
+**every call on all nine parses identically**, 3,408 of them. Then `python -m epl.pundits live
+--season 2025` refreshed one of them for real: `epl.ingest.cache` archived the 23 Aug bytes into
+`superseded/` under their own fetch stamp, wrote the new ones, and
+`tests/pundits/test_the_frozen_dataset.py` still rebuilt `predictions.csv` byte-for-byte from them.
+So the archive's HTML churns continuously while its content does not — which is exactly the case for
+the dataset being committed and frozen rather than re-scraped on every run (issue #11), and the
+supersede rule earning its keep on a file that mattered.
+
 ## Open risks
 
-1. **BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.
-2. **The live path is only half tested.** Re-checked 21 Aug 2026: `fixtures.csv` is reachable and parses, but it still holds a single English row (one E2 fixture) and no E0 rows, and `mmz4281/2627/E0.csv` still does not exist. The transport is proven; the E0 live path is not. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — the check that must pass before a live Prediction Round can be sealed.
+1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.
+2. **The live path is only half tested — and half of that half closed on 27 Aug 2026.** `mmz4281/2627/E0.csv` **now exists**: it returns 10 rows for the opening round, carrying `Avg*` pre-match odds, and `epl.ingest.football_data.parse_season_csv` reads it into `MATCH_COLUMNS` unchanged. So the E0 season-file path is proven. What is still **not** proven is `fixtures.csv`, which on the same day held five rows — one National League fixture and four Spanish — and **no E0 rows at all**, one day before the second round's kickoff. Upcoming Premier League Fixtures are what a Sealed Prediction Round needs, so that is the live gap that remains, and it is issue #17's. Note also that the corpus itself still stops at 2025/26: ingesting the Season in progress moves `epl.windows.LAST_SEASON`, which is the leakage protocol's own module. `pytest --run-network` exercises what can be exercised, including the check that no new Club spelling has appeared upstream — now asked of the Pundit source too, where it has already failed once correctly (Coventry and Hull).
 3. ~~**MyFootballFacts parseability is unverified.** Content correctness was confirmed — a 2025/26 result cross-checked exactly against Football-Data — but the HTML has not been parsed across all nine season pages.~~ **Closed at stage 7.** All nine parse, yielding **3,408 calls** of a possible 3,420, and the cross-check went far past the one row the ticket asked for: the page prints the real score beside every call, and **3,402 of the 3,406 that carry one match Football-Data**, with the four exceptions named above. The HTML is hand-maintained and reads like it — annotated names, six misspellings, two Scorelines dropped inside a Club's name, and which table holds the predictions moving between pages — so the parser recognises a call by its shape rather than by where it sits, and refuses a page that yields fewer than 360 or more than 420. `tests/pundits/test_over_the_corpus.py` re-derives all of it.
 4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.

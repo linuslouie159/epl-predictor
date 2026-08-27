@@ -7,6 +7,14 @@
     python -m epl.pundits three-way model, market and both readings, over shared Fixtures
     python -m epl.pundits calls     every call ranked by the miss its fair reading still had
     python -m epl.pundits map       what a call of each predicted goal margin is worth
+    python -m epl.pundits live      the Season in progress: what the archive has, and how late
+
+``live`` is issue #16's spike, kept runnable. It discovers the Season pages from the archive's own
+index rather than naming them — the slug convention changed for 2026/27 and a URL built from the
+Season would 404 — fetches the Season in progress, and reports what it holds against what has been
+played. **Its answer is that a Pundit cannot be sealed**: the archive transcribes a matchday after
+it has been played, so the calls for the next Prediction Round are not there when the round's
+As-Of Instant passes. See :mod:`epl.pundits.live` for the measurement behind that.
 
 ``build`` is the one that has to be believed, so it prints its own evidence rather than a count.
 Every call carries the result MyFootballFacts published beside it, and every one of those is
@@ -38,6 +46,7 @@ than this module's (issue #12's seventh acceptance criterion).
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -46,7 +55,7 @@ import pandas as pd
 import epl.ledger as ledger
 from epl.ingest import match_table
 from epl.ledger import scoreboard
-from epl.pundits import dataset, grading, myfootballfacts, report
+from epl.pundits import dataset, grading, live, myfootballfacts, report
 from epl.windows import season_label
 
 #: How many of the ranked calls each end of the printed table shows. The file holds every one.
@@ -74,6 +83,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("three-way", help="model, market and both readings over shared Fixtures")
     sub.add_parser("calls", help="every call ranked by the miss its fair reading still had")
     sub.add_parser("map", help="what a call of each predicted goal margin is worth")
+    live_cmd = sub.add_parser(
+        "live", help="the Season in progress: what the archive has published, and how late"
+    )
+    live_cmd.add_argument(
+        "--season",
+        type=int,
+        default=None,
+        help="which Season to read (default: the latest the archive's index carries)",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "fetch":
@@ -82,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         return _build(args.matches)
     if args.command == "grades":
         return _grades(args.matches)
+    if args.command == "live":
+        return _live(args.matches, args.season)
 
     # The three-way reports score stored Predictions, so every Predictor on the board has to be
     # registered before one is read — the board's `note` column is looked up by name.
@@ -99,6 +119,62 @@ def _fetch(refresh: bool) -> int:
     for page in myfootballfacts.PAGES:
         path = myfootballfacts.fetch_page(page, refresh=refresh)
         print(f"{season_label(page.season)} {page.pundit:>10} -> {path}")
+    return 0
+
+
+def _live(matches_path: Path | None, season: int | None) -> int:
+    """Issue #16's spike as a command: what the archive holds for the Season in progress.
+
+    The Season pages are **discovered**, not named. That is the half of the spike the BBC could not
+    supply at all — it publishes pundit columns under opaque article IDs with no index — and it is
+    what survived the archive changing its slug convention for 2026/27.
+    """
+    pages = myfootballfacts.discover_pages()
+    print(f"{len(pages)} Season pages linked from {myfootballfacts.INDEX_URL}")
+    print(f"  {season_label(min(p.season for p in pages))}"
+          f" .. {season_label(max(p.season for p in pages))}")
+
+    unused = [page for page in pages if page not in myfootballfacts.PAGES]
+    if unused:
+        print(f"  {len(unused)} the backfill does not use: "
+              f"{', '.join(season_label(p.season) for p in unused)}")
+
+    page = live.page_for(season or max(p.season for p in pages), pages)
+    print(f"\nreading {season_label(page.season)} ({page.pundit}) <- {page.path}")
+
+    listings = live.fetch(page)
+    print(f"  {len(listings)} calls published")
+
+    matches = match_table(matches_path)
+    if not (matches["season"] == page.season).any():
+        print(
+            f"\nthe corpus holds no {season_label(page.season)} Fixtures, so these calls cannot "
+            "be reconciled yet.\ningesting the Season in progress moves epl.windows.LAST_SEASON "
+            "and belongs to issue #17."
+        )
+        return 0
+
+    built = live.build(matches, listings)
+    print(f"  {len(built.calls)} reconciled into {len(dataset.CALL_COLUMNS)}-column rows")
+    if not built.unplaced.empty:
+        print(f"  {len(built.unplaced)} name a Fixture the corpus has not seen:")
+        print(built.unplaced[["home_club", "away_club"]].to_string(index=False))
+
+    season_fixtures = matches[
+        (matches["season"] == page.season) & (matches["division"] == dataset.DIVISION)
+    ]
+    today = dt.date.today()
+
+    # The latency first, because it is the half that can always be answered: it needs only
+    # Fixtures already played, which is exactly what the corpus is.
+    print(f"\n{live.lag(built.calls, season_fixtures, as_of=today).describe()}")
+
+    try:
+        found = live.coverage(built.calls, season_fixtures, as_of=today)
+    except live.LiveError as error:
+        print(f"\ncannot say whether the next round is sealable: {error}")
+        return 0
+    print(f"\n{found.describe()}")
     return 0
 
 

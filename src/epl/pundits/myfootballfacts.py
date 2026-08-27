@@ -42,12 +42,17 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
 from epl.ingest import cache
 from epl.ingest.fetcher import Fetcher, default_fetcher
 from epl.paths import raw_dir
+from epl.windows import season_label
+
+if TYPE_CHECKING:  # pragma: no cover - the parser imports bs4 lazily, the annotations do not
+    from bs4 import BeautifulSoup
 
 #: The source name under which MyFootballFacts' spellings are registered as Aliases.
 SOURCE = "myfootballfacts"
@@ -82,6 +87,36 @@ PAGES: tuple[Page, ...] = (
     Page(2023, "sutton", "chris-sutton-predictions-for-premier-league-2023-24"),
     Page(2024, "sutton", "chris-sutton-predictions-for-premier-league-2024-25"),
     Page(2025, "sutton", "chris-sutton-predictions-for-premier-league-2025-26"),
+)
+
+#: The index every Season page is linked from, and the one thing the archive has that the BBC does
+#: not (issue #16). :data:`PAGES` can be a literal because those nine Seasons are over; the Season
+#: in progress cannot, because the archive has used **four** slug conventions across the eighteen
+#: Seasons it links, and the newest arrived with 2026/27 —
+#: ``chris-sutton-predictions-premier-league-2026-27`` drops the ``for-`` its four predecessors
+#: carried. A URL built from the Season would 404.
+INDEX_URL = f"{BASE_URL}/"
+
+#: How many Season pages the index must yield before discovery is believed. Eighteen are linked as
+#: of August 2026; the floor is the nine already frozen, because discovery that cannot see the
+#: committed backfill has stopped working whatever else it came back with.
+MIN_DISCOVERED = len(PAGES)
+
+#: How many index pages to follow before giving up on ``rel="next"`` terminating. Three exist;
+#: this is the guard against a redesign that links every page to the next one forever.
+MAX_INDEX_PAGES = 25
+
+#: The Season at the end of a slug — ``2017-18``, ``2026-27``. The four-digit half is the Season's
+#: identity everywhere else in the project, so that is what is kept.
+_SEASON_IN_SLUG = re.compile(r"(?:^|-)(?P<start>\d{4})-(?P<end>\d{2})$")
+
+#: Which Pundit a slug names. ``lawro`` and ``lawrenson`` are the same person written two ways, and
+#: both appear — the archive renamed the column mid-record. Matched longest-first so
+#: ``mark-lawrensons`` cannot be read as anything else.
+_PUNDIT_IN_SLUG: tuple[tuple[str, str], ...] = (
+    ("sutton", "sutton"),
+    ("lawrenson", "lawrenson"),
+    ("lawro", "lawrenson"),
 )
 
 #: Canonical column order for one page's listings, before any Club is resolved. Named apart from
@@ -155,6 +190,100 @@ def raw_page_path(page: Page) -> Path:
     return raw_dir() / SOURCE / f"{page.path}.html"
 
 
+def discover_pages(
+    *,
+    fetcher: Fetcher | None = None,
+    timeout: float = 60.0,
+    minimum: int | None = None,
+) -> tuple[Page, ...]:
+    """Every Season page the index links to, in Season order.
+
+    This is what :data:`PAGES` cannot be for a Season in progress. The nine frozen pages could be
+    written down because those Seasons are over; the current one is reachable only by asking the
+    index, since the slug convention has changed four times and changed again for 2026/27.
+
+    Pagination follows the index's own ``rel="next"``. The alternative — walking ``page/2/``,
+    ``page/3/`` until one 404s — builds a loop whose exit condition is an error, and would ask
+    upstream for a page it was never told exists.
+
+    ``minimum`` defaults to :data:`MIN_DISCOVERED`, read here rather than bound as a default so the
+    constant stays the single authority. It exists for tests that build an index of one link.
+    """
+    from bs4 import BeautifulSoup
+
+    minimum = MIN_DISCOVERED if minimum is None else minimum
+    fetcher = fetcher or default_fetcher(timeout)
+
+    by_season: dict[int, Page] = {}
+    url: str | None = INDEX_URL
+    seen: set[str] = set()
+
+    while url and url not in seen and len(seen) < MAX_INDEX_PAGES:
+        seen.add(url)
+        soup = BeautifulSoup(fetcher(url), "lxml")
+        for slug in _linked_slugs(soup):
+            page = _page_from_slug(slug)
+            if page is None:
+                continue
+            if page.season in by_season and by_season[page.season].path != page.path:
+                raise PunditSourceError(
+                    f"the index links two Season pages for {season_label(page.season)} — "
+                    f"{by_season[page.season].path!r} and {page.path!r}. One Season is one "
+                    "record of one Pundit's calls, and nothing here says which of two is it"
+                )
+            by_season.setdefault(page.season, page)
+        url = _next_index(soup)
+
+    if len(by_season) < minimum:
+        raise PunditSourceError(
+            f"{INDEX_URL} yielded {len(by_season)} Season page(s); expected at least {minimum}. "
+            "The index has most likely been restructured upstream"
+        )
+    return tuple(by_season[season] for season in sorted(by_season))
+
+
+def _linked_slugs(soup: BeautifulSoup) -> list[str]:
+    """The path segment of every link that points at a page *under* the predictions index."""
+    prefix = f"{BASE_URL}/"
+    slugs = []
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor["href"]).split("?", 1)[0].split("#", 1)[0]
+        if not href.startswith(prefix):
+            continue
+        slug = href[len(prefix) :].strip("/")
+        if slug and "/" not in slug:
+            slugs.append(slug)
+    return slugs
+
+
+def _page_from_slug(slug: str) -> Page | None:
+    """One Season page, or ``None`` for a link that is not one.
+
+    The index carries a landing page (``mark-lawrenson-predictions``) and a feed alongside the
+    Season pages, and neither names a Season. Absence of a Season is the test, rather than a list
+    of things to skip that a future addition would slip past.
+
+    A slug that *does* name a Season but no Pundit is skipped too, and that is the one place this
+    is a judgement rather than a fact: it would be a third forecaster taking over the column, and
+    the alternative — raising — would instead break on any unrelated link ending in a year pair.
+    The skip is visible rather than silent, because the Season range discovery found is printed by
+    ``python -m epl.pundits live`` and :data:`MIN_DISCOVERED` still has to be cleared.
+    """
+    season = _SEASON_IN_SLUG.search(slug)
+    if season is None:
+        return None
+    for token, pundit in _PUNDIT_IN_SLUG:
+        if token in slug:
+            return Page(int(season.group("start")), pundit, slug)
+    return None
+
+
+def _next_index(soup: BeautifulSoup) -> str | None:
+    """The index's own link to its successor, if it offers one."""
+    link = soup.find("link", rel="next", href=True)
+    return str(link["href"]) if link else None
+
+
 def fetch_page(
     page: Page,
     *,
@@ -207,8 +336,10 @@ def parse_page(html: bytes | str, page: Page, *, minimum: int | None = None) -> 
     """Every call on one Season's page, in the order the page lists them.
 
     ``minimum`` defaults to :data:`MIN_CALLS`, read here rather than bound as a default so that the
-    constant stays the single authority. It exists for tests that build a page of three rows on
-    purpose; nothing in the pipeline passes it.
+    constant stays the single authority. Two callers pass it: tests that build a page of three rows
+    on purpose, and :func:`epl.pundits.live.parse`, for which the floor is *wrong* rather than
+    inconvenient — a Season in progress has published between nought and 380 calls and every one of
+    those is the correct answer on some day (issue #16).
     """
     from bs4 import BeautifulSoup
 

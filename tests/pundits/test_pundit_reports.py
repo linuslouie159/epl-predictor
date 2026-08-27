@@ -158,3 +158,52 @@ class TestFetch:
         assert cli.main(["fetch"]) == 0
 
         assert PAGE.path in capsys.readouterr().out
+
+
+class TestLive:
+    """Issue #16's spike as a command. It reaches the network for the index and the page, so what
+    is tested here is the path around that: discovery in, and the two things the report has to say
+    when the corpus cannot yet reach the Season it found."""
+
+    @pytest.fixture
+    def discovered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Discovery, answered without a network. The page it finds is the one in the cache."""
+        monkeypatch.setattr(myfootballfacts, "discover_pages", lambda: (PAGE,))
+        monkeypatch.setattr(
+            myfootballfacts,
+            "fetch_page",
+            lambda page, **kwargs: myfootballfacts.raw_page_path(page),
+        )
+
+    def test_it_reports_what_the_archive_holds_for_the_season_it_found(
+        self,
+        corpus: Path,
+        cached_page: None,
+        discovered: None,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        assert cli.main(["live"]) == 0
+
+        printed = capsys.readouterr().out
+        assert "Season pages linked" in printed
+        assert "3 calls published" in printed
+        assert "reconciled" in printed
+
+    def test_it_says_so_rather_than_failing_when_the_corpus_cannot_reach_that_season(
+        self,
+        project_root: Path,
+        cached_page: None,
+        discovered: None,
+        make_matches: Callable[..., pd.DataFrame],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The live Season is ahead of the corpus until issue #17 moves ``LAST_SEASON``, and a
+        command that crashed on that would be reporting a bug rather than a state."""
+        processed_dir().mkdir(parents=True, exist_ok=True)
+        make_matches({"season": PAGE.season - 1}).to_csv(
+            processed_dir() / "matches.csv", index=False
+        )
+
+        assert cli.main(["live"]) == 0
+
+        assert "belongs to issue #17" in capsys.readouterr().out

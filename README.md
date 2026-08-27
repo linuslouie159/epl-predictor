@@ -70,7 +70,16 @@ Hyperparameters are tuned only on the Burn-In Window (2000/01–2004/05) and fro
 | Football-Data.co.uk `E0`–`E3` | results, match stats, odds | 2000/01– , four tiers |
 | Football-Data.co.uk `fixtures.csv` | upcoming Fixtures + Market Line | rolling ~1 week |
 | MyFootballFacts | Pundit backfill (Lawrenson, Sutton) | 2017/18–2025/26, 3,408 rows, frozen |
-| BBC Sport | live Pundit predictions | current Season |
+| MyFootballFacts | Pundit calls for the Season in progress | ~a round behind the football |
+| ~~BBC Sport~~ | ~~live Pundit predictions~~ | **not used — see below** |
+
+**The BBC is the origin of every Pundit call and is not a source this project reads.** Issue #16
+tested it: it is reachable and its articles are machine-readable, and `bbc.co.uk/robots.txt` forbids
+scraping, dataset creation and text-and-data mining, and disallows `ClaudeBot`, `Claude-Web` and
+`anthropic-ai` outright. MyFootballFacts permits exactly that and is therefore the only Pundit source
+here — but it transcribes a matchday *after* it has been played, so **a Pundit cannot be part of a
+Sealed Prediction**. Measured: nought of the next round's ten calls two days before kickoff. See
+docs/DECISIONS.md, "The BBC spike".
 
 Odds column availability is era-dependent and this matters: no odds at all before 2002/03,
 market-average pre-match (`BbAv*`) from 2005/06 spliced to `Avg*` from 2019/20, market-average closing
@@ -125,6 +134,7 @@ outputs/overround.csv   the margin in each book per Season; regenerable, gitigno
 src/epl/pundits/        myfootballfacts.py, dataset.py, grading.py, predictor.py
 src/epl/pundits/margin.py         the margin map; calibrated.py the Predictor over it
 src/epl/pundits/report.py         the three-way board, the certainty gap, the calls by miss
+src/epl/pundits/live.py           the Season in progress, and why it cannot be sealed from
 src/epl/pundits/predictions.csv   the frozen backfill: 3,408 calls, committed with the code
 outputs/three_way.csv   the board over each Pundit's shared Fixtures; regenerable, gitignored
 outputs/certainty.csv   the two readings and the gap between them; regenerable, gitignored
@@ -239,7 +249,7 @@ Prediction — asserted structurally, so the three-way scoreboard cannot become 
 
 ```
 pytest                  # unit tests, plus corpus integrity checks when data/raw/ is populated
-pytest --run-network    # also hits football-data.co.uk
+pytest --run-network    # also hits football-data.co.uk and the MyFootballFacts index
 ```
 
 Tests marked `cache` re-derive the measured facts in [docs/DECISIONS.md](./docs/DECISIONS.md) from
@@ -598,6 +608,7 @@ python -m epl.pundits fetch    # cache the nine archive pages
 python -m epl.pundits build    # parse, reconcile with the corpus, freeze predictions.csv
 python -m epl.pundits grades   # exact-score and correct-Outcome rates per Pundit and Season
 python -m epl.pundits three-way  # the three-way board and the cost of stating certainty
+python -m epl.pundits live     # the Season in progress: what the archive has, and how late
 ```
 
 **3,408 calls of a possible 3,420.** Only facts are stored — Fixture, predicted Scoreline, Pundit,

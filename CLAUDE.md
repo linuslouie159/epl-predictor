@@ -139,6 +139,21 @@ Do not "fix" these without reading the linked ADR first:
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
   Both are explained where they live — `src/epl/ingest/cache.py`, which both the Football-Data
   ingest and the Pundit fetch write through, and `src/epl/clubs/table.py`.
+- **The Season pages are named in `PAGES` *and* discovered from an index, and both are correct.**
+  The nine frozen Seasons are literals because they are over; the Season in progress cannot be,
+  because the archive has used four slug conventions in eighteen Seasons and 2026/27 dropped the
+  `for-` its four predecessors carried. `discover_pages` follows the index's own `rel="next"`
+  rather than walking `page/2/`, `page/3/` until one 404s — a loop whose exit condition is an error
+  asks upstream for a page it was never told exists.
+- **`epl.pundits.live` lifts the backfill's size floor and keeps its ceiling**, and that asymmetry
+  is the point. `MIN_CALLS = 360` is right for a complete Season and wrong for every live page
+  there has ever been — 2026/27's held ten. The ceiling survives because a page scanned twice
+  doubles whether or not the Season is over.
+- **A live call the corpus cannot place is handed back, not dropped and not raised on.**
+  `epl.pundits.dataset._locate` refuses that case and says in its own docstring that doing so is
+  right for the backfill and wrong for #16. `live.build` filters and hands the rest to the frozen
+  builder, so there is one implementation of what a listing becomes. Measured, `unplaced` is empty
+  on every live page seen — which is why anything in it is worth reading.
 
 ## Never do this
 
@@ -237,6 +252,51 @@ Validated across the 20 completed Evaluation Window Seasons at three checkpoints
 champion was the projection's favourite **73%** of the time and in its top three **97%**, it gave
 the champion a mean title probability of **0.581**, and its ten-bin calibration error is **0.008**
 pooled — against about 0.006 for every match Predictor on the scoreboard.
+
+**Stage 12 is built**: the BBC live Pundit spike (`src/epl/pundits/live.py`,
+`myfootballfacts.discover_pages`, issue #16) — a spike, so the deliverable is a decision backed by
+evidence, and the evidence changed the question. `python -m epl.pundits live`.
+
+**The answer is that a Pundit cannot be part of a Sealed Prediction.** Not because the calls do not
+exist in time — the BBC publishes them days before kickoff — but because the only source this
+project is *permitted* to read has not transcribed them yet.
+
+Seven things about stage 12 worth knowing before building on it:
+
+- **The BBC is reachable and machine-readable, and is still unusable.** Re-tested 27 Aug 2026: it
+  answers in 0.1s, the opaque article IDs resolve, and the pages carry `application/ld+json` and
+  `window.__INITIAL_DATA__`. The blocker is `bbc.co.uk/robots.txt`, which forbids "scraping,
+  crawling, or systematic extraction", "creating datasets from BBC content" and text and data
+  mining — and disallows `ClaudeBot`, `Claude-Web` and `anthropic-ai` from the whole site. That
+  answer does not change when a network does, which is why open risk 1 is closed rather than
+  deferred. **Do not build a BBC fetcher.**
+- **MyFootballFacts permits exactly what the BBC forbids** — `Allow: /` for the same agents, named
+  individually — and has the one thing the BBC lacks: an index. So it is the source, and the BBC
+  remains the *origin* named beside every call.
+- **Its measured latency is the finding.** Against archived snapshots of the 2025/26 page, asking
+  what a Prediction Round asks — are the next round's calls published yet? — the answer was **10 of
+  10 on the season opener, then 0 of 10 two days before a round, and 0 of 10 eleven days before**.
+  The live 2026/27 page agreed on 27 Aug 2026: one day before round two it held round one only,
+  results already filled in. The archive transcribes a matchday *after* it is played.
+- **The consequence for #17**: the live loop seals the models and the Market Line, and a Pundit's
+  column on the three-way board is filled in retrospectively. This constrains the live loop only —
+  the committed backfill is nine complete Seasons, and every published Pundit number comes from it.
+- **The index links eighteen Season pages and the backfill uses nine.** 2009/10–2026/27
+  consecutively; the eight before 2017/18 are ~3,000 more Lawrenson calls this project has never
+  scored, on the same source in the same shape. Worth an issue, not in scope at #16.
+- **All nine cached pages had drifted from upstream and every call still parses identically.**
+  280–450 bytes different each, 3,408 calls unchanged. Refreshing one for real archived the old
+  bytes into `superseded/` and the frozen dataset still rebuilt byte-for-byte. The HTML churns and
+  the content does not, which is the evidence behind `predictions.csv` being committed rather than
+  re-scraped.
+- **`epl.pundits.live` has two measurements, not one, and only one can be taken today.** `lag` looks
+  backwards and needs played matches, so the corpus answers it. `coverage` looks forwards and needs
+  Fixtures that have not kicked off, which the corpus by definition lacks — those come from
+  `fixtures.csv` at #17. Do not merge them: that would report "cannot tell yet" as `sealable=False`,
+  which is the one answer this finding must not give by accident.
+- **Open risk 2 half closed on the same day.** `mmz4281/2627/E0.csv` now exists and parses — 10
+  rows, with `Avg*` odds. `fixtures.csv` still holds **no E0 rows**: five rows, one National League
+  and four Spanish, one day before a Premier League round. Upcoming Fixtures are what #17 needs.
 
 Seven things about stage 11 worth knowing before building on it:
 
@@ -495,16 +555,27 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**The modelling stages are done.** What is left open is the *live* half — **#16** (BBC Pundit
-spike) and **#17** (sealing a round before kickoff), which are where open risks 1 and 2 live. #17 is
-also what turns the Season Projection from a historical exercise into a weekly one: a live Season is
-projected at every Prediction Round (`projection_rounds(..., live=True)`), and the Fixtures still to
-come have to be handed in from `fixtures.csv` rather than found in the corpus — `slate_at` says so
-in its docstring, and it is the one part of the projection with no live path yet.
+**The modelling stages are done, and #16 is closed.** What is left of the *live* half is **#17**
+(sealing a round before kickoff), which is where open risk 2 lives. #17 is also what turns the
+Season Projection from a historical exercise into a weekly one: a live Season is projected at every
+Prediction Round (`projection_rounds(..., live=True)`), and the Fixtures still to come have to be
+handed in from `fixtures.csv` rather than found in the corpus — `slate_at` says so in its docstring,
+and it is the one part of the projection with no live path yet.
+
+**Three things stage 12 hands #17, and none of them is optional.** A Pundit **cannot be sealed**, so
+the live loop seals the models and the Market Line and fills the Pundit column in retrospectively.
+`fixtures.csv` held **no E0 rows** on 27 Aug 2026, so upcoming Premier League Fixtures have no
+confirmed source yet and that is the first thing to re-check. And the corpus stops at 2025/26 —
+ingesting the Season in progress moves `epl.windows.LAST_SEASON`, which is the leakage protocol's
+own module, so it is a deliberate change rather than a config bump.
 
 Also ready: **issue #18**, the deferred-v2 stubs (XGBoost, Golden Boot, API-Football). It has been
 unblocked since stage 1, needs nothing from the ledger, and is small — pick it up when a stage
 lands and there is no appetite to start the next one.
+
+And newly found rather than planned: the archive's index links **eighteen** Season pages, 2009/10
+onward, where the backfill uses nine. The eight before 2017/18 are ~3,000 more Lawrenson calls on
+the same source in the same shape — an issue worth filing, not a thing to fold into #17.
 
 The model target is met, so there is no longer a pending question about accuracy.
 
@@ -525,6 +596,7 @@ python -m epl.pundits grades   # exact-score and correct-Outcome rates per Pundi
 python -m epl.pundits three-way      # the three-way board and the cost of stating certainty
 python -m epl.pundits calls    # every call ranked by the miss its fair reading still had
 python -m epl.pundits map      # what a call of each predicted goal margin is worth
+python -m epl.pundits live     # the Season in progress: what the archive has, and how late
 python -m epl.ledger backfill  # walk every registered Predictor over the Evaluation Window
 python -m epl.ledger scoreboard      # every metric twice, pre- and post-calibration
 python -m epl.ledger reliability     # the 10-bin diagrams per Predictor, in both forms

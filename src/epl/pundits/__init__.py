@@ -1,6 +1,9 @@
 """Pundits: the backfill, the two gradings, and the Pundits registered as Predictors.
 
-Built by issues #11 and #12. Issue #16 adds the BBC live spike.
+Built by issues #11 and #12. Issue #16 added :mod:`epl.pundits.live`, whose finding is that a
+Pundit **cannot** be part of a Sealed Prediction: the BBC publishes the calls in time and forbids
+reading them, and MyFootballFacts permits it but transcribes a matchday only after it is played.
+Everything else here is unaffected — the committed backfill is nine complete Seasons.
 
 A Pundit publishes a Scoreline, not a distribution. Scoring that as `[1, 0, 0]` charges 1.00 RPS for
 calling Home when Away happens — punishing a claim of certainty the Pundit never made, and putting
@@ -26,7 +29,7 @@ attribute BBC as the origin. `predictions.csv` beside this module is that datase
 committed so the accountability feature is backtestable on day one rather than in a year, and so a
 scoreboard run does not depend on nine pages of someone else's HTML still being up.
 
-Seven modules:
+Eight modules:
 
 * :mod:`epl.pundits.myfootballfacts` — the nine archive pages, fetched and parsed
 * :mod:`epl.pundits.dataset` — resolved to Clubs, reconciled with the corpus, and frozen
@@ -35,6 +38,7 @@ Seven modules:
 * :mod:`epl.pundits.margin` — the margin map: what a call of a given margin has been worth
 * :mod:`epl.pundits.calibrated` — the two Calibrated Pundits, registered over that map
 * :mod:`epl.pundits.report` — the three-way board, the certainty gap, the calls by miss
+* :mod:`epl.pundits.live` — the Season in progress, and why it cannot be sealed from
 
 :mod:`epl.pundits.report` is deliberately **not** imported here. It reports over
 :mod:`epl.ledger`, which imports this package to register its Predictors; keeping it out of the
@@ -56,13 +60,23 @@ from epl.pundits.dataset import (
     outcomes_of,
 )
 from epl.pundits.grading import GRADE_COLUMNS, SUMMARY_COLUMNS, grade, summary
-from epl.pundits.myfootballfacts import ORIGIN, PAGES, SOURCE, Page, PunditSourceError
+from epl.pundits.live import Coverage, Lag, LiveCalls, LiveError
+from epl.pundits.myfootballfacts import (
+    INDEX_URL,
+    ORIGIN,
+    PAGES,
+    SOURCE,
+    Page,
+    PunditSourceError,
+    discover_pages,
+)
 from epl.pundits.predictor import LAWRENSON, SUTTON, Pundit, PunditError
 
 __all__ = [
     "CALL_COLUMNS",
     "FIXTURE_KEY",
     "GRADE_COLUMNS",
+    "INDEX_URL",
     "LAWRENSON",
     "MARGIN_MAP_LAWRENSON",
     "MARGIN_MAP_SUTTON",
@@ -73,12 +87,17 @@ __all__ = [
     "SUTTON",
     "Backfill",
     "CalibratedPundit",
+    "Coverage",
+    "Lag",
+    "LiveCalls",
+    "LiveError",
     "Page",
     "Pundit",
     "PunditDatasetError",
     "PunditError",
     "PunditSourceError",
     "build",
+    "discover_pages",
     "grade",
     "load",
     "outcomes_of",
