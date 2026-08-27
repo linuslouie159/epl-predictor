@@ -154,6 +154,38 @@ class TestTheTiebreakerChain:
 
         assert orders == {("d", "b", "a", "c")}
 
+    def test_three_clubs_level_are_settled_as_a_mini_league_and_not_in_pairs(self) -> None:
+        """A multi-way tie, which the spec asks for by name and a pair cannot stand in for.
+
+        a, b and c all finish on 7 points, +1 goal difference and 5 goals scored. Their three
+        meetings give b 4 points, c 3 and a 1, so the mini-league orders them b, c, a — an order no
+        single pairing produces: a *drew* with b and *lost* to c, so settling the tie pairwise in
+        any order would put a somewhere it does not belong.
+
+        All three also played d, twice each, and none of that may count here.
+        """
+        slate = finished(
+            # The three meetings that settle it.
+            ("a", "b", 1, 1),
+            ("b", "c", 2, 0),
+            ("c", "a", 1, 0),
+            # And the matches against d that made them level, which the mini-league must not see.
+            ("a", "d", 3, 2),
+            ("a", "d", 1, 0),
+            ("b", "d", 2, 0),
+            ("d", "b", 3, 0),
+            ("c", "d", 3, 1),
+            ("c", "d", 1, 1),
+        )
+
+        standings = slate.standings(None)
+        level = dict(zip(slate.clubs, standings.points[0], strict=True))
+        orders = {tuple(order_of(slate, seed=seed)) for seed in range(20)}
+
+        assert level["a"] == level["b"] == level["c"] == 7
+        assert list(standings.goal_difference[0][:3]) == [1, 1, 1]
+        assert orders == {("b", "c", "a", "d")}
+
     def test_the_chain_is_stated_in_order(self) -> None:
         assert TIEBREAKERS[:3] == ("points", "goal difference", "goals scored")
         assert "head-to-head points" in TIEBREAKERS[3]
