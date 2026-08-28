@@ -1258,9 +1258,11 @@ The live loop was then run for real, and what it found is the state of open risk
 | 2026-08-27 14:21 UTC — same day, eight hours later | Tue 25 Aug 09:59 GMT | 5 | **0** |
 | 2026-08-28 15:12 UTC — **from the Pi**, the Friday of a round | Fri 28 Aug 12:01 GMT | 197 | **10** |
 
-All three fetches found a file holding only Fixtures dated on or before the day it was generated: one
-League One tie (`E2`, Sheffield Wed v Bradford City) and two Spanish on the first, one National
-League tie (`EC`) and four Spanish on the other two. The second fetch's file was **two days stale** —
+The fourth row is stage 16's and is discussed below; the three above it are what stage 13 measured,
+and they are the reason this section reads the way it does. **Each of those three** found a file
+holding only Fixtures dated on or before the day it was generated: one League One tie (`E2`,
+Sheffield Wed v Bradford City) and two Spanish on the first, one National League tie (`EC`) and four
+Spanish on the other two. The second fetch's file was **two days stale** —
 the `Last-Modified` header says it was written on the Tuesday morning, and even that batch, generated
 three days before a Premier League round, carried no Premier League row.
 
@@ -1304,9 +1306,11 @@ authenticated, key-carrying source is weaker than it was while the doubt stood, 
 `FETCHES_MEASURED`, the count that settles the question as `PREMIER_LEAGUE_ROWS_SEEN` — now `10` —
 and the conditions that would revive the client as `WHAT_WOULD_REVIVE_IT`. A fourth fetch was an
 append to a tuple and a one-digit edit, which is the reason the fetches are data there and prose
-here. Two of the four revival conditions were falsified by that fetch and were removed; what remains
-is the live Season Projection, which needs the rest of the campaign and not three days of it, and
-the risk that the file is unreliable *in time* rather than absent.
+here. The fourth fetch falsified two of the four revival conditions — "keeps reporting no E0 rows"
+and "the forward horizon stays shorter than a sealing window" — and both were removed. Two survive
+untouched: the live Season Projection, which needs the rest of the campaign rather than three days
+of it, and the file dropping the market-average odds columns. One was added, and it is open risk 7:
+that the file is unreliable *in time* rather than absent. Three conditions now, not four.
 
 ### Added at stage 14 (the deferred-v2 stubs, issue #18)
 
@@ -1380,9 +1384,11 @@ nothing in return.
 it and persists, so a fire is a few files rather than a hundred. The cost accepted in exchange is
 real and should not be glossed: **if the Pi is off on a Friday afternoon, that round is lost and
 cannot be sealed later.** That is a worse failure mode than Actions', and it was chosen anyway,
-because the input this loop is waiting for does not exist yet — see open risk 2 — and a schedule
-firing onto an empty file loses nothing at all. Revisit the moment `fixtures.csv` starts carrying
-Premier League rows.
+because at the time the input this loop waits for had never been seen, and a schedule firing onto an
+empty file loses nothing at all. **That reasoning has since expired.** `fixtures.csv` carried a full
+round on 28 Aug 2026 and the loop sealed it, which is the condition this paragraph said to revisit
+on — so the cost is now live rather than hypothetical. It is being carried rather than escalated,
+on measured grounds; see open risk 6.
 
 **Why a container, on a machine that already runs Python on bare metal.** The Pi's other tenant is a
 paper-trading loop installed as a venv of prebuilt aarch64 wheels, chosen that way specifically so
@@ -1583,6 +1589,16 @@ reason it exists. Dixon-Coles gave Manchester City 0.587 away at Crystal Palace 
 Line's 0.576; the two disagree by more on Bournemouth v Everton, 0.452 against 0.456 with Elo at
 0.560. Nothing about the numbers needed defending, which is the only reason it was allowed to write.
 
+### What has not been observed yet
+
+**A real scheduled fire.** Every command in `deploy/crontab` has been run by hand on the Pi and all
+three exit 0 — `upcoming`, `seal` and `score` — and the crontab is installed with its times converted
+into the Pi's zone. What has not happened at the time of writing is cron firing one of them
+unattended. That is #21's fifth acceptance criterion and it is the one thing here still outstanding;
+the next slot is 13:30 in the Pi's zone, 18:30 UK, on a Tuesday or Friday. Until a `===== RUN` block
+appears in `deploy/logs/live_loop.log` that nobody typed, the schedule is installed rather than
+proven.
+
 ## Open risks
 
 1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.
@@ -1591,4 +1607,4 @@ Line's 0.576; the two disagree by more on Bournemouth v Everton, 0.452 against 0
 4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.
 6. **A round whose sealing window passes while the Pi is off is lost, and cannot be recovered.** This is the price of choosing a machine at home over GitHub Actions at stage 15, and it was chosen knowingly — see "The schedule, and where it runs". `supersede` refuses a round after its first kickoff on purpose, so there is no catching up afterwards. **Its trigger has now fired.** This risk said to revisit it "the moment `fixtures.csv` starts carrying Premier League rows", and that moment was 28 Aug 2026: the Pi's uptime is now load-bearing for the one store in this project that cannot be regenerated. Measured on the day it was deployed, and the reason it is being *kept* rather than escalated: the Pi had been up **32 days continuously**, `vcgencmd get_throttled` reported `0x0` — no undervoltage or thermal event since boot — it runs from NVMe rather than an SD card, and it already carries a second production tenant whose owner would notice an outage independently. The loop also fires twice per window, so only an outage spanning both loses a round. That is judged sufficient for now and it is a judgement, not a proof: a single home machine has no redundancy, and one long outage over a Friday is all it takes. The mitigation short of moving is to watch `deploy/logs/live_loop.log` for a week with no `===== RUN` block in it, which is what an off Pi looks like from here — and that is precisely what issue #20's bot is for, which is why #20 matters more now than it did when nothing sealed.
-7. **The rolling fixtures file is reliable in shape but not in time, and a round is lost if every fetch inside its window lands on a stale copy.** This is what open risk 2 became when it closed. Upstream regenerates `fixtures.csv` irregularly: three fetches across 21–27 Aug 2026 found a file that had not been rewritten in two and a half days *across a matchday*, and the fourth, on 28 Aug, found one written three hours earlier carrying the whole round. Nothing distinguishes the two cases except when the fetch happened to land. The schedule is the mitigation — two fires per window, at 16:00 and 18:30 UK, so a single stale sample does not lose the round — and it is a mitigation rather than a fix, because both fires read the same upstream file and a copy stale for a whole afternoon defeats both. **Do not confuse this with open risk 6.** That one is about this machine being off; this one happens with the Pi up, the loop green and the log reporting exit 0, because "no Premier League row in the file" is a quiet success by design and is indistinguishable from a genuinely empty week. What would close it is a source with a stated refresh guarantee — which is the surviving argument in `epl.v2.api_football.WHAT_WOULD_REVIVE_IT`, and now the main one.
+7. **The rolling fixtures file is reliable in shape but not in time, and a round is lost if every fetch inside its window lands on a stale copy.** This is what open risk 2 became when it closed. Upstream regenerates `fixtures.csv` irregularly: three fetches across 21–27 Aug 2026 found a file that had not been rewritten in two and a half days *across a matchday*, and the fourth, on 28 Aug, found one written three hours earlier carrying the whole round. Nothing distinguishes the two cases except when the fetch happened to land. The schedule is the mitigation — two fires per window, at 16:00 and 18:30 UK, so a single stale sample does not lose the round — and it is a mitigation rather than a fix, because both fires read the same upstream file and a copy stale for a whole afternoon defeats both. **Do not confuse this with open risk 6.** That one is about this machine being off; this one happens with the Pi up, the loop green and the log reporting exit 0, because "no Premier League row in the file" is a quiet success by design and is indistinguishable from a genuinely empty week. What would close it is a source with a stated refresh guarantee, which is one of the two surviving arguments in `epl.v2.api_football.WHAT_WOULD_REVIVE_IT`. The other, and the stronger of the pair, is the live Season Projection: this risk costs a round when it bites, and that one cannot be built at all from a file three days wide.

@@ -24,7 +24,10 @@ claims a moment that has not happened, and the odds it would have to read do not
 holds and which side of its window each round is on; :func:`next_round` picks the one sealable round
 and, when there is none, raises with that table in the message. The measured reason this matters:
 on 27 August 2026, one day before the second round of 2026/27, ``fixtures.csv`` held five Fixtures —
-one National League and four Spanish — and no Premier League row at all.
+one National League and four Spanish — and no Premier League row at all. The very next day it held
+the whole round, ten Premier League Fixtures with odds, and that round was sealed. Upstream
+regenerates the file irregularly, so both answers are ordinary and this table is how you tell which
+one you got.
 """
 
 from __future__ import annotations
@@ -70,8 +73,9 @@ class NothingToSeal(LiveError):
     The distinction a schedule needs and a person does not. Run by hand on a Friday afternoon, both
     of :func:`next_round`'s refusals are read by somebody who then decides what they mean. Run twice
     a week by cron for a season, they have to decide it themselves — because "no round is inside its
-    window" is most of the week, and "the rolling file held no Premier League row" has so far been
-    *every* fire there has ever been (docs/DECISIONS.md, "Measured at stage 13"). A loop that exits
+    window" is most of the week, and "the rolling file held no Premier League row" was every fire
+    there had ever been until 28 August 2026, and is still most of them (docs/DECISIONS.md, open
+    risk 7 — the file is reliable in shape, not in time). A loop that exits
     non-zero on those is a loop whose failures nobody reads by November, which is the failure
     issue #19's fourth criterion is written against.
 
@@ -172,8 +176,8 @@ def rounds(fixtures: pd.DataFrame, *, now: pd.Timestamp) -> pd.DataFrame:
 
     :data:`ROUND_STATUS_COLUMNS`, in the order the rounds were predicted. This is the table
     :func:`next_round` chooses from and the one its complaint quotes, so a run that seals nothing
-    still says exactly what it saw — which, given how thin the rolling file has measured, is most
-    of what the live command is for.
+    still says exactly what it saw — which, given how unevenly the rolling file has measured, is
+    most of what the live command is for.
     """
     table = prediction_rounds(fixtures)
     if table.empty:

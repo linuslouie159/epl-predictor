@@ -50,8 +50,9 @@ ROLLING_CSV = "\r\n".join(
     ]
 )
 
-#: What every fetch of the real file has actually held: no row in a tier this project predicts.
-#: Measured on three fetches, 21 and 27 August 2026 — docs/DECISIONS.md, "Measured at stage 13".
+#: What the first three fetches of the real file held: no row in a tier this project predicts.
+#: Measured 21 and 27 August 2026. The fourth, on 28 August, held ten — so this is the common case
+#: rather than the only one, and both have to stay quiet successes. docs/DECISIONS.md, open risk 7.
 NO_PREMIER_LEAGUE_CSV = "\r\n".join(
     [
         "Div,Date,Time,HomeTeam,AwayTeam,AvgH,AvgD,AvgA",
@@ -186,9 +187,9 @@ class TestNothingToSeal:
         self, corpus: Path, nothing_we_predict: Path, repo: Path, stopped_clock: None,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """The only case there has ever been. Three fetches of the real file, on 21 and twice on 27
-        August 2026, held no E0 row at all, so until upcoming Fixtures have a confirmed source this
-        is what every single fire of the schedule will do."""
+        """The common case, and for three fetches the only one seen. The real file held no E0 row on
+        21 and twice on 27 August 2026, and held a whole round on the 28th; upstream regenerates it
+        irregularly, so a fire landing on a stale copy sees this and must not go red for it."""
         assert cli.main(["seal", "--cached"]) == 0
 
         assert "no row in a tier this project predicts" in capsys.readouterr().out

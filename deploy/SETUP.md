@@ -309,6 +309,40 @@ If it fails here, fix it now:
 
 ## 8. Install the schedule
 
+**Skip 8a if the Pi's own zone is already `Europe/London`** — `timedatectl` will say. Then 8b
+installs `deploy/crontab` unchanged.
+
+### 8a. First, prove whether `CRON_TZ` works. Before installing anything
+
+The order matters, and this file used to have it the wrong way round. `deploy/crontab` schedules in
+UK time and relies on `CRON_TZ=Europe/London` to mean it; **Raspberry Pi OS's cron (3.0pl1-197)
+ignores that line**, measured 28 Aug 2026. Installing first and checking afterwards leaves a
+wrong-hour schedule live in the meantime — and on a Pi behind the UK a wrong hour loses rounds
+rather than delaying them. Do not take it on trust; grepping the docs proves nothing either.
+
+```bash
+# a throwaway entry 3 minutes from now, written in LONDON time
+LON=$(TZ=Europe/London date -d "+3 minutes" "+%M %H")
+echo "should fire at $(date -d '+3 minutes' '+%H:%M %Z') if CRON_TZ is honoured"
+rm -f /tmp/cron_tz_probe
+crontab -l > /tmp/cur 2>/dev/null
+printf "CRON_TZ=Europe/London
+%s * * * date -u > /tmp/cron_tz_probe
+" "$LON" >> /tmp/cur
+crontab /tmp/cur
+sleep 240; cat /tmp/cron_tz_probe    # a file means honoured; "No such file" means ignored
+```
+
+Then take the probe back out, whichever way it went:
+
+```bash
+crontab -l | grep -v cron_tz_probe | grep -v '^CRON_TZ' | crontab -
+```
+
+### 8b. Then install, converting the times if 8a said to
+
+**If the probe fired**, install `deploy/crontab` as it stands:
+
 ```bash
 cd ~/epl-predictor
 sed "s|__ROOT__|$PWD|g" deploy/crontab > /tmp/epl.cron
@@ -316,41 +350,31 @@ crontab -l > /tmp/current 2>/dev/null; cat /tmp/epl.cron >> /tmp/current; cronta
 crontab -l | tail -6
 ```
 
-Confirm the paths in the output are absolute and real, and that `CRON_TZ=Europe/London` survived.
-
-### Then prove `CRON_TZ` actually works, because on the first Pi it did not
-
-This file used to say "Debian's does; some do not" and move on. **Raspberry Pi OS's cron
-(3.0pl1-197) ignores it**, measured 28 Aug 2026. Do not take it on trust — grepping the docs proves
-nothing either. Fire a probe:
+**If it did not fire, that same command installs a broken schedule**, because it copies the UK times
+and the inert `CRON_TZ` line verbatim. Convert as you install, and drop the `CRON_TZ` line — leaving
+it beside already-converted times is how a future cron that starts honouring it shifts them a second
+time:
 
 ```bash
-# a throwaway entry 3 minutes from now, written in LONDON time
-LON=$(TZ=Europe/London date -d "+3 minutes" "+%M %H")
-echo "should fire at $(date -d '+3 minutes' '+%H:%M %Z') if CRON_TZ is honoured"
-rm -f /tmp/cron_tz_probe
-crontab -l > /tmp/cur
-printf "%s * * * date -u > /tmp/cron_tz_probe\n" "$LON" >> /tmp/cur
-crontab /tmp/cur
-sleep 240; cat /tmp/cron_tz_probe    # a file means honoured; "No such file" means ignored
+cd ~/epl-predictor
+# UK -> this Pi's own zone. Check each against `date`; deliberately not automated.
+sed "s|__ROOT__|$PWD|g" deploy/crontab   | grep -v '^CRON_TZ'   | sed -e 's|^  0  6 |  0  1 |' -e 's|^  0 16 |  0 11 |' -e 's|^ 30 18 | 30 13 |'   > /tmp/epl.cron
+crontab -l > /tmp/current 2>/dev/null; cat /tmp/epl.cron >> /tmp/current; crontab /tmp/current
+crontab -l | tail -6
 ```
 
-Remove the probe line afterwards either way.
+Those three substitutions are the `America/New_York` conversion the first Pi needed — 06:00/16:00/
+18:30 UK becoming 01:00/11:00/13:30 EDT. **Recompute them for any other zone** rather than copying,
+and record what you installed, because `deploy/crontab` in the repository stays zone-neutral and
+will not remind you.
 
-**If it is ignored, do not set the whole Pi to `Europe/London`.** That used to be the first
-suggestion here and it is the wrong one on any Pi with a second tenant: this one also runs a
+Either way, confirm the paths in the output are absolute and real, and that the hours are the ones
+you meant *in this Pi's zone*.
+
+**Whatever you do, do not fix this by setting the whole Pi to `Europe/London`.** That used to be the
+first suggestion here and it is the wrong one on any Pi with a second tenant: this one also runs a
 paper-trading loop whose crontab is written around the US market open, and moving the system zone
-would silently reschedule somebody else's job. Convert these three times instead, and **delete the
-`CRON_TZ` line while you do** — leaving it behind next to already-converted times is how a future
-cron that starts honouring it shifts them a second time.
-
-The conversion on the first Pi, whose zone is `America/New_York`:
-
-| `deploy/crontab` says (UK) | installed as (Pi local) | command |
-|---|---|---|
-| 06:00 | **01:00** | `score` |
-| 16:00 | **11:00** | `seal --push` |
-| 18:30 | **13:30** | `seal --push` |
+would silently reschedule somebody else's job.
 
 **Why an hour of DST drift does not matter here, and five hours does.** The UK and the US change
 clocks on different dates, so for a few weeks a year these land an hour off. The window runs from
