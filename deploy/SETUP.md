@@ -7,32 +7,40 @@ order — several steps exist only to make a later one work, and they are marked
 these times, what each exit code means, and how this coexists with the paper-trading project on the
 same machine. This file answers *how*, and tries not to repeat it.
 
-**Two things to know before you start.**
+**Three things to know before you start.**
 
-**This has been built and run once — on amd64, not on a Pi.** On 27 Aug 2026 the image was built on
-an x86-64 desktop and exercised end to end: the entrypoint answers, the bind mount and editable
-install put `/repo/src` on the path, `uk_now()` reads UK wall-clock time inside the container, the
-full `upcoming --cached` path exits 0, and git runs against the mounted repository with no "dubious
-ownership" complaint. Steps 6, 7 and the compose wiring are therefore checked rather than assumed.
+**This has now been run on a Pi, and the numbers below are that run.** On 28 Aug 2026 the whole of
+this file was followed on a Raspberry Pi 5 (8 GB, NVMe, Raspberry Pi OS, system zone
+`America/New_York`) at issue #21. Where a step was wrong it has been corrected here rather than
+annotated. The one thing it does not cover is a 4 GB Pi or an SD card — see step 0.
 
-**What that does not cover, and it is the part most likely to bite:**
+**The aarch64 build is fast, and the old advice to cross-build was wrong.** This is the correction
+most worth reading before you start, because it inverts what step 3 used to say:
 
-- **The conda solve on aarch64.** It took **24 minutes on a desktop** (1450 s for `conda env create`
-  alone, of a 27-minute build). A Pi 5 will be slower, and this is the step that fails if
-  conda-forge cannot resolve this environment for `linux-aarch64`. Nothing below proves it can.
-- **RAM.** A desktop build says nothing about a 4 GB Pi. See step 0.
-- **The SSH push.** Step 7 was run and reached the remote-auth stage, but the desktop's remote is
-  HTTPS, so what it proved is that git works and `safe.directory` is wired — not that a mounted
-  deploy key does. That part is genuinely first-run on the Pi.
+| | amd64 desktop, 27 Aug | **Pi 5, 28 Aug** |
+|---|---|---|
+| `conda env create` | 1450 s | **73 s** |
+| whole build | ~27 min | **271 s** |
 
-The image came out at **6 GB**, which is the cost of full `environment.yml` parity. Budget the disk.
+`environment.yml` needed **no aarch64 exception** — conda-forge solved it in about 7 seconds for
+`linux-aarch64` and every pin, OpenBLAS included, resolved as written (ADR 0009 holds on this
+platform). The desktop figure was almost certainly Docker Desktop's VM filesystem rather than
+anything about x86-64; a Pi 5 on NVMe simply does this work quickly. **Build natively. Do not
+cross-build**, and budget five minutes rather than an hour.
 
-**The loop will seal nothing, and that is correct.** `fixtures.csv` has never been observed carrying
-a Premier League row — three fetches, 21 and twice on 27 Aug 2026 — so every fire will report "no
-row in a tier this project predicts" and exit 0. You are installing a watcher, not starting a track
-record. See `deploy/README.md` and docs/DECISIONS.md open risk 2.
+The image is **5.76 GB on disk, 1.3 GB of content**, which is the cost of full `environment.yml`
+parity. Budget the disk, not the time.
 
-Budget an hour, most of it waiting for step 3 and step 5.
+**The loop may well seal something, and this changed on the day it was first deployed.** Every
+earlier draft of this file said the loop would seal nothing, because `fixtures.csv` had never been
+observed carrying a Premier League row. On 28 Aug 2026 at 15:12 UTC — the fourth fetch ever taken,
+and the first from the Pi — it carried **10**, the whole of that evening's round with market-average
+odds attached, and the round was sealable there and then. Treat step 6 as live: if it names Fixtures,
+the next `seal` will write into `outputs/live/`, which is append-only evidence that cannot be
+rewritten. See `deploy/README.md` and docs/DECISIONS.md, "Bringing it up on the Pi, and the
+first Sealed Prediction Round".
+
+Budget half an hour, most of it waiting for step 5.
 
 ---
 
@@ -50,8 +58,10 @@ command -v flock && echo "flock ok"   # the cron wrapper refuses to run without 
 ship this scientific stack for it. If that is what you have, stop — the fix is reinstalling 64-bit
 Pi OS, not working around this.
 
-**RAM.** A conda solve is memory-hungry and a 4 GB Pi can be tight. If step 3 dies with the build
-process killed, that is the OOM killer rather than a broken Dockerfile; add swap and retry:
+**RAM.** A conda solve is memory-hungry and a 4 GB Pi can be tight. Measured on 28 Aug 2026: an
+8 GB Pi 5 with 2 GB of swap already configured built the image without coming near the limit, and
+the solve was over in 73 seconds. A 4 GB board is still the untested case. If step 3 dies with the
+build process killed, that is the OOM killer rather than a broken Dockerfile; add swap and retry:
 
 ```bash
 sudo dphys-swapfile swapoff
@@ -121,6 +131,21 @@ git remote -v          # must say git@github.com:..., not https://
 git push               # "Everything up-to-date", not a password prompt
 ```
 
+**If step 1's key is not on GitHub yet, this clone cannot happen** — and adding a deploy key needs a
+human at a browser, which is not always the same minute as the rest of this. That is the one place
+it is worth getting ahead: the repository is public, so clone over HTTPS and re-point the remote,
+then finish step 1 whenever the key lands. The clone is byte-identical either way.
+
+```bash
+git clone https://github.com/linuslouie159/epl-predictor.git ~/epl-predictor
+cd ~/epl-predictor
+git remote set-url origin git@github.com:linuslouie159/epl-predictor.git
+```
+
+Nothing before step 7 needs the key, so the build and the ingest can run meanwhile. **Do not leave
+it at that**, though: an HTTPS remote is exactly the `could not read Username for 'https://github.com'`
+row in step 7's table, and the loop would seal rounds it could never push.
+
 ---
 
 ## 3. Build the image
@@ -132,18 +157,13 @@ cd ~/epl-predictor
 docker build -f deploy/Dockerfile -t epl-predictor:live .
 ```
 
-This is the slow step, and the conda solve dominates it. **Measured on an amd64 desktop, 27 Aug
-2026: 27 minutes total, of which `conda env create` alone was 1450 s.** The image comes out at 6 GB.
-A Pi 5 will be slower on both counts.
+**Measured on a Pi 5 with NVMe, 28 Aug 2026: 271 seconds total**, of which `conda env create` was
+73 s and the image export 174 s. The image comes out at 5.76 GB on disk, 1.3 GB of content.
 
-That number is the argument for cross-building rather than building natively. It is the same work
-either way, a desktop does it faster, and a desktop cannot be OOM-killed doing it:
-
-```bash
-# on the desktop, in a clone of this repo
-docker buildx build --platform linux/arm64 -f deploy/Dockerfile -t epl-predictor:live --load .
-docker save epl-predictor:live | ssh pi@raspberrypi 'docker load'
-```
+This step used to carry advice to cross-build on a desktop and `docker save | ssh 'docker load'` the
+result, on the strength of a 27-minute amd64 build. **That advice was wrong and has been removed.**
+The Pi was six times faster than the desktop it was meant to borrow, so cross-building would trade a
+four-minute native build for a multi-gigabyte image transfer plus QEMU. Build here.
 
 Verify:
 
@@ -151,14 +171,14 @@ Verify:
 docker run --rm epl-predictor:live --help      # the loop's own help text
 ```
 
-**If it fails**, in rough order of likelihood: the OOM killer (see step 0); a conda-forge solve
-conflict, which would be the first real evidence that `environment.yml` needs an aarch64 exception;
-or the `grep` guard failing, which means the pip section of `environment.yml` moved and the
-Dockerfile's comment explains what to do. It is a floating `:latest` base — if a rebuild ever
-behaves differently from a previous one, pin it to a digest before suspecting anything else.
+**If it fails**, in rough order of likelihood: the OOM killer (see step 0); or the `grep` guard
+failing, which means the pip section of `environment.yml` moved and the Dockerfile's comment
+explains what to do. It is a floating `:latest` base — if a rebuild ever behaves differently from a
+previous one, pin it to a digest before suspecting anything else.
 
-The `grep` guard, the `sed`, the layer split and the editable install were all exercised in the
-amd64 build, so a failure here is about **aarch64 or memory**, not about the Dockerfile's logic.
+A conda-forge solve conflict is no longer on that list. It was the named unknown until 28 Aug 2026,
+and `linux-aarch64` resolved `environment.yml` as written in about 7 seconds. If it starts failing,
+that is upstream drift on a floating base, not this platform.
 
 ---
 
@@ -214,19 +234,31 @@ echo "exit: $?"
 tail -n 30 deploy/logs/live_loop.log
 ```
 
-`upcoming` is the whole of `seal`'s work up to the point where `seal` would write. Exit 0 and a log
-block like this is success:
+`upcoming` is the whole of `seal`'s work up to the point where `seal` would write. Exit 0 is success,
+and there are two shapes it comes in. This is the one seen on the Pi on 28 Aug 2026, and the stamps
+are in the *host's* zone — `-0400` here, because this Pi's system zone is `America/New_York`:
 
 ```
-===== RUN 2026-08-27 17:16:57 +0100  (upcoming ) =====
-rolling file: fixtures_20260827T142131Z.csv
-0 upcoming Premier League Fixtures in 2026/27
-the rolling file held no Fixture in a tier this project predicts, so there is no Prediction Round to seal
-===== END  2026-08-27 17:16:57 +0100  (exit 0) =====
+===== RUN 2026-08-28 11:12:00 -0400  (upcoming ) =====
+rolling file: fixtures_20260828T151202Z.csv
+10 upcoming Premier League Fixtures in 2026/27
+prediction_round as_of_instant  season  fixtures       first_kickoff        last_kickoff   status
+      2026-08-28    2026-08-28    2026        10 2026-08-28 20:00:00 2026-08-31 20:00:00 sealable
+  2026-08-28 20:00 crystal_palace v man_city
+  ...
+sealable now: 2026-08-28
+===== END  2026-08-28 11:12:03 -0400  (exit 0) =====
 ```
 
-**"0 upcoming Premier League Fixtures" is the expected answer**, not a failure. If it ever says
-something else, that is the day this project has been waiting for — see `deploy/README.md`.
+The other shape names no Fixtures and says "the rolling file held no Fixture in a tier this project
+predicts". **Both are exit 0 and neither is a failure.** Which one you get depends on whether
+upstream has regenerated `fixtures.csv` since the round was listed, and for the first three fetches
+ever taken it was always the empty one — see docs/DECISIONS.md, open risk 7.
+
+**If it says `sealable now:`, stop and read step 7 before running `seal`.** The next `seal` will
+write a real Prediction into `outputs/live/`, which is append-only: a round can be superseded at a
+new As-Of Instant but never rewritten, and it cannot be sealed at all once its first kickoff has
+passed. That is the moment this schedule exists for, and it is not one to walk into by accident.
 
 Sanity-check the clock while you are here, because a wrong one is silent:
 
@@ -243,22 +275,32 @@ another zone it should not.
 
 ## 7. Prove the push path before anything depends on it
 
-Worth its own step. Nothing will seal for the foreseeable future, so `--push` will not exercise
-itself, and you would otherwise discover a broken deploy key on the one day it finally mattered.
+Worth its own step, and it earned that on the first Pi: **this is where the only genuine bug in the
+whole deployment turned up**, with everything else already green. Do not skip it because step 6
+worked.
 
 ```bash
 docker compose -f deploy/docker-compose.yml run --rm --entrypoint git live push --dry-run
 ```
 
 That runs git *inside the container*, with the same mounted key, the same `HOME`, and the same uid
-the schedule will use. `Everything up-to-date` means the whole chain works: key readable, host key
-accepted, remote reachable, write access granted.
+the schedule will use. `Everything up-to-date` — or a `a1b2c3d..e4f5g6h  main -> main` line if the Pi
+is ahead — means the whole chain works: key readable, host key accepted, remote reachable, write
+access granted.
+
+**The bug, because it will not look like a bug in this file.** ssh resolves `~` from the *passwd
+database* for the running uid, not from `$HOME`. Setting `HOME=/home/epl` and mounting the key there
+is therefore not enough: this base image has a real `ubuntu` user at uid 1000, so ssh read
+`/home/ubuntu/.ssh`, found nothing, and reported `Host key verification failed` — while the correct
+`known_hosts` sat mounted and readable a directory away. `docker-compose.yml` now sets
+`GIT_SSH_COMMAND` naming the key and `known_hosts` outright, which is what makes this independent of
+whatever the floating base image's passwd file happens to contain.
 
 If it fails here, fix it now:
 
 | Message | Cause |
 |---|---|
-| `Host key verification failed` | step 1's `ssh -T` was skipped; the read-only mount cannot fix this itself |
+| `Host key verification failed` | **Check the mount path before blaming step 1.** ssh resolves `~` from the passwd database, not `$HOME`, so it reads the uid-1000 user's real home — which in this base image is `/home/ubuntu`, not the `/home/epl` the key is mounted at. `GIT_SSH_COMMAND` in docker-compose.yml names both files outright to settle it. If that is present and correct, *then* it is step 1's `ssh -T` having been skipped; the read-only mount cannot fix that itself |
 | `Permission denied (publickey)` | key not added to GitHub, or added without write access |
 | `dubious ownership` | `GIT_CONFIG_*` in compose is not reaching git — check `deploy/.env` uid |
 | `could not read Username` | the remote is HTTPS; re-point it at SSH (step 2) |
@@ -276,23 +318,56 @@ crontab -l | tail -6
 
 Confirm the paths in the output are absolute and real, and that `CRON_TZ=Europe/London` survived.
 
-**If your cron does not honour `CRON_TZ`** — Debian's does; some do not — the consequence is mild
-and worth knowing. The loop would fire at the wrong hour and exit 0 having sealed nothing, because
-the window is judged in UK time by the code (`epl.ledger.live.uk_now`) whatever cron believes. A
-misconfigured schedule here seals nothing; it cannot seal something wrongly. Check with:
+### Then prove `CRON_TZ` actually works, because on the first Pi it did not
+
+This file used to say "Debian's does; some do not" and move on. **Raspberry Pi OS's cron
+(3.0pl1-197) ignores it**, measured 28 Aug 2026. Do not take it on trust — grepping the docs proves
+nothing either. Fire a probe:
 
 ```bash
-grep -r CRON_TZ /usr/share/doc/cron/ 2>/dev/null | head -2
+# a throwaway entry 3 minutes from now, written in LONDON time
+LON=$(TZ=Europe/London date -d "+3 minutes" "+%M %H")
+echo "should fire at $(date -d '+3 minutes' '+%H:%M %Z') if CRON_TZ is honoured"
+rm -f /tmp/cron_tz_probe
+crontab -l > /tmp/cur
+printf "%s * * * date -u > /tmp/cron_tz_probe\n" "$LON" >> /tmp/cur
+crontab /tmp/cur
+sleep 240; cat /tmp/cron_tz_probe    # a file means honoured; "No such file" means ignored
 ```
 
-If it is unsupported, either set the whole Pi to `Europe/London` (`sudo raspi-config`, Localisation)
-or convert the three times into the Pi's own zone by hand.
+Remove the probe line afterwards either way.
+
+**If it is ignored, do not set the whole Pi to `Europe/London`.** That used to be the first
+suggestion here and it is the wrong one on any Pi with a second tenant: this one also runs a
+paper-trading loop whose crontab is written around the US market open, and moving the system zone
+would silently reschedule somebody else's job. Convert these three times instead, and **delete the
+`CRON_TZ` line while you do** — leaving it behind next to already-converted times is how a future
+cron that starts honouring it shifts them a second time.
+
+The conversion on the first Pi, whose zone is `America/New_York`:
+
+| `deploy/crontab` says (UK) | installed as (Pi local) | command |
+|---|---|---|
+| 06:00 | **01:00** | `score` |
+| 16:00 | **11:00** | `seal --push` |
+| 18:30 | **13:30** | `seal --push` |
+
+**Why an hour of DST drift does not matter here, and five hours does.** The UK and the US change
+clocks on different dates, so for a few weeks a year these land an hour off. The window runs from
+midnight to the round's first kickoff and the odds are sampled in the afternoon, so an hour either
+way changes nothing. Five hours does: uncorrected, `18:30` fires at 23:30 London, **past a 20:00
+kickoff**, and that round can never be sealed — `supersede` refuses a round after its first kickoff
+on purpose. The old note here claimed a misconfigured schedule "seals nothing; it cannot seal
+something wrongly", and the second half of that is still true. The first half is not a consolation:
+a loop that silently seals nothing looks exactly like a week with nothing to seal.
 
 ---
 
 ## 9. Watch the first real fire
 
-The next scheduled slot is 06:00, 16:00 or 18:30 UK on a Tuesday or Friday. After it passes:
+The next scheduled slot is 06:00, 16:00 or 18:30 UK on a Tuesday or Friday — **in whatever those
+became on this Pi**, if you applied step 8's conversion. Check with `crontab -l` rather than from
+memory. After it passes:
 
 ```bash
 tail -n 40 ~/epl-predictor/deploy/logs/live_loop.log
@@ -304,6 +379,18 @@ the whole design: a week with nothing to seal is silent, and a round that could 
 **A log with no new `===== RUN` block for a week is what an off Pi looks like from here**, and it is
 the mitigation for open risk 6 — a round whose window passes while the Pi is off is lost and cannot
 be sealed later.
+
+**And a block that *is* there, says exit 0, and sealed nothing is the harder case.** It means either
+a genuinely empty week or a rolling file upstream had not regenerated when both fires read it (open
+risk 7), and the log cannot tell you which. On a Tuesday or Friday of a Premier League round, the
+second is worth ruling out by hand:
+
+```bash
+cd ~/epl-predictor && deploy/run_live.sh upcoming     # writes nothing; safe at any hour
+```
+
+Reading the log is the mitigation for one silence and not the other, which is most of the argument
+for issue #20's bot.
 
 ---
 

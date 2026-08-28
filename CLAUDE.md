@@ -365,32 +365,30 @@ unchanged. The reason is the calendar — May to August, so no scored round's As
 new Season — which is why the separation is free today and no reason to rely on it. The guard is
 `EVALUATION_WINDOW` staying at `range(2005, 2026)`.
 
-**The code is built and tested end to end; its input is not proven.** Open risk 2 is **documented
-rather than closed**, and this is the thing to know before planning anything live:
+**The code is built and tested end to end, and its input is now proven.** Open risk 2 **closed on
+28 Aug 2026, in the affirmative**, and this is the thing to know before planning anything live:
 
-- **`fixtures.csv` has never been seen carrying a Premier League row.** Three fetches — 21 Aug 2026
-  (the evening round one kicked off), then twice on 27 Aug 2026, the day before round two — held 3,
-  5 and 5 rows and **no E0**. The last two were two days stale by `Last-Modified` (Tue 25 Aug 09:59
-  GMT) and were **byte-identical to each other** eight hours apart, so upstream had not regenerated
-  the file across a matchday: a fetch timed later in the day would not have caught a fresher batch.
-  Its forward horizon at generation is about two days, shorter than a Prediction Round's own window.
-- **It is not that the file omits English football.** The first fetch carried an `E2` tie. It has
-  simply never been seen carrying the one tier this project predicts. Three fetches cannot prove a
-  negative, which is why this is measured rather than closed — `python -m epl.live upcoming` asks the
-  question on any given day and writes nothing.
-- **This puts issue #18's premise in doubt.** API-Football was deferred *because* "`fixtures.csv`
-  already carries upcoming Fixtures with the Market Line". The stub should record the measurement,
-  not the assumption.
-- **The live Season Projection is blocked on the same input, and was not built.** A projection
-  simulates every *remaining* Fixture of the campaign and `slate_at` says those must come from
-  `fixtures.csv`; a two-day horizon cannot supply the rest of a season. Worth an issue.
+- **`fixtures.csv` does carry Premier League rows, and the first three fetches were unlucky rather
+  than diagnostic.** Fetches on 21 Aug 2026 and twice on 27 Aug held 3, 5 and 5 rows and **no E0**;
+  the last two were two days stale by `Last-Modified` and byte-identical eight hours apart. The
+  fourth, from the Pi at 15:12 UTC on 28 Aug — the Friday of a round — held **197 rows, 10 of them
+  `E0`**, written three hours earlier, covering the whole round out to three days ahead with the
+  `Avg*` odds the Market Line needs. Upstream regenerates the file irregularly; a fetch landing
+  between regenerations sees a stale one.
+- **What replaces it is narrower and is open risk 7.** The file is reliable in shape, not in time. A
+  round is lost if every fetch inside its window lands on a stale copy — and that happens with the
+  Pi up and the log reporting exit 0, because "no Premier League row" is a quiet success by design.
+- **Issue #18's premise is confirmed, not in doubt.** API-Football was deferred *because*
+  "`fixtures.csv` already carries upcoming Fixtures with the Market Line", and it now demonstrably
+  does. `epl.v2.api_football` carries `PREMIER_LEAGUE_ROWS_SEEN = 10` and stays a stub for its
+  original reason — the case for a paid authenticated source is *weaker* than while the doubt stood.
+- **The live Season Projection is still blocked, and this did not unblock it.** A projection needs
+  every *remaining* Fixture of the campaign; the fourth fetch reached three days ahead, not nine
+  months. It is now the strongest surviving entry in `WHAT_WOULD_REVIVE_IT`. Worth an issue.
 - **The Pundit column on the live board is empty by design.** Filling it means folding a Season in
   progress into the committed, frozen `predictions.csv`, which is the one thing issue #11 froze it
   against. The right moment is when the archive's page for the Season is complete.
-- **The loop is schedulable and is deliberately not scheduled.** Both write commands are idempotent
-  inside a round, which is all a cron entry or a workflow needs; none is committed. There is nothing
-  to seal yet, and a schedule that fetches upstream and pushes commits to this repository is the
-  repository owner's call rather than a default.
+- **The loop is scheduled, and it has sealed.** See stage 16 below.
 
 **Stage 15 is built**: the schedule (`deploy/`, issue #19) — the live loop running unattended in a
 container on a Raspberry Pi, fired by the Pi's own crontab. `deploy/run_live.sh seal --push`.
@@ -402,8 +400,10 @@ and are recorded in docs/DECISIONS.md, "The schedule, and where it runs":
   `data/processed/` are gitignored and `score` rebuilds the match table from all 108 files, so every
   run would cold-fetch the whole corpus twice a week forever. The price accepted is real and is
   **open risk 6** — a round whose window passes while the Pi is off is lost, and `supersede` refuses
-  a round after kickoff on purpose. Tolerable only because there is nothing to seal yet; revisit it
-  the day `fixtures.csv` starts carrying Premier League rows.
+  a round after kickoff on purpose. That was tolerable while there was nothing to seal, and the
+  revisit it asked for — "the day `fixtures.csv` starts carrying Premier League rows" — came on
+  28 Aug 2026. It is being kept rather than escalated on measured grounds (32 days' uptime, no
+  throttling, NVMe, a second tenant whose owner would notice an outage); see open risk 6.
 - **An automated push is acceptable**, opt-in via `--push`, over a deploy key. A commit proves *when*
   to whoever can reach the machine holding it, and on a Pi that is nobody — so an unattended loop
   that does not push has not finished sealing anything. A failed push exits 1 and says `NOT PUSHED`,
@@ -425,6 +425,42 @@ Four things about stage 15 worth knowing:
   reach the network.
 - **Nothing here schedules `backfill`.** It would regenerate Predictions the loop had sealed — ADR
   0005's exact failure — and move the Evaluation Window's numbers on a timer.
+
+**Stage 16 is built**: the deployment itself (issue #21) — the image built on the Pi, the schedule
+installed in its crontab, and the first Sealed Prediction Round written. Its deliverable was evidence
+rather than code; see "Bringing it up on the Pi" in docs/DECISIONS.md.
+
+Seven things about stage 16 worth knowing:
+
+- **The project has a live track record now, of one round.** `outputs/live/2026-08-28.csv`, 40
+  Predictions over 10 Fixtures from `market_line`, `naive_baseline`, `dixon_coles` and `elo`, as-of
+  `2026-08-28T00:00:00`, committed. The other five Predictors were silent, exactly as stage 12 said
+  they would be. Never rewrite it — supersede or nothing.
+- **`fixtures.csv` carried 10 Premier League rows on the fourth fetch**, and open risk 2 closed in
+  the affirmative. The three earlier fetches were not measuring a two-day horizon; they were landing
+  on a file upstream had not regenerated. That distinction is open risk 7.
+- **`deploy/run_live.sh` was committed `100644` and every clone landed it non-executable**, so the
+  whole schedule would have failed with exit 126 while looking installed. Windows hides this
+  (`core.filemode` is `false`), which is why `tests/deploy/test_the_schedule_is_runnable.py` asks
+  `git ls-files -s` and not the filesystem. Do not "simplify" it to a `Path.stat()` check.
+- **ssh does not read `$HOME`; it reads the passwd database for the uid.** This was the only real
+  bug in the deployment and it surfaced at the push proof, everything else green. The key is mounted
+  at `/home/epl/.ssh` with `HOME` set to match, but `condaforge/miniforge3:latest` has a real
+  `ubuntu` user at uid 1000, so ssh looked in `/home/ubuntu/.ssh` and answered `Host key
+  verification failed` with the correct file mounted one directory away. `GIT_SSH_COMMAND` in
+  `deploy/docker-compose.yml` now names the key and `known_hosts` outright. Do not "simplify" it
+  back to relying on `HOME`, and do not delete `HOME` either — it is still right for a uid that has
+  no passwd entry.
+- **`CRON_TZ=Europe/London` is ignored by Raspberry Pi OS's cron**, which `deploy/crontab` had said
+  Debian's honours. Prove it with the probe in SETUP.md step 8 rather than reading documentation.
+  The installed crontab therefore uses the Pi's own zone and has **no `CRON_TZ` line** — leaving one
+  beside already-converted times is how a future cron shifts them twice.
+- **Do not fix a timezone problem by setting the Pi's system zone.** SETUP.md used to suggest it
+  first. This Pi's other tenant is the paper-trading loop, whose crontab is written around the US
+  market open, and moving the zone would silently reschedule it.
+- **The aarch64 build is fast and `environment.yml` needed no exception** — 271 s in total, 73 s of
+  conda solve, against 1450 s of solve on amd64. The advice to cross-build was written from the
+  amd64 number and was wrong; it has been removed from SETUP.md.
 
 **Stage 14 is built**: the deferred-v2 stubs (`src/epl/v2/`, issue #18) — the XGBoost/ML layer, the
 Golden Boot player model and the API-Football client, written down instead of built (decision 12).
@@ -706,63 +742,37 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Every ticket through #19 is built, and #21 is the next one to do.** The modelling stages are done,
-the live loop is built, the deferred features are written down, and the schedule that runs the loop
-is committed under `deploy/`.
+**Every ticket through #21 is built, and #20 is the next one to do.** The modelling stages are done,
+the live loop is built and deployed, the deferred features are written down, and the schedule is
+installed on a Raspberry Pi with all three of its commands proven.
 
-**But `deploy/` has never been executed, and that is the point of #21.** The image has not been
-built on the Pi, no crontab is installed, and nothing has fired. #19's seven acceptance criteria
-were all about code behaviour and all seven were met and verified; a running deployment was never
-among them, and could not have been — the Pi decision was made partway through that ticket, on a
-machine with no running Docker. So the gap between "the schedule is written" and "the schedule
-runs" belongs to #21, whose deliverable is **evidence rather than code**, and whose criteria include
-correcting `deploy/SETUP.md` from what actually happens.
+**The situation changed on 28 Aug 2026 and most of what used to be written here is out of date.**
+`fixtures.csv` carried Premier League rows for the first time, the round was sealed, and the project
+now has a live track record of exactly one round. Open risk 2 is closed; open risk 7 replaces it.
+See "Bringing it up on the Pi" in docs/DECISIONS.md before planning anything live.
 
-Do #21 before #20. The bot reports on a loop that runs, and half its notifications describe events —
-a round sealed, a round scored, the schedule failing — that cannot happen until one does.
+**#20 is filed, open, and no longer blocked — and it matters more than it did.** A Telegram bot:
+seal and score notifications, and the board on demand. Its first acceptance criterion was that
+nothing announces the day the answer changes. That day has now happened, and it was noticed only
+because a person was watching a terminal. The same is true of every failure mode that remains: open
+risk 6 (the Pi off through a window) and open risk 7 (a stale upstream file inside a window) both
+look exactly like a quiet week from the log, and both now cost a real round. Note the constraints
+the ticket carries — it must be read-only with respect to both stores (a chat app is not a second
+door into `outputs/live/`), and it must not quote a calibrated Live Season figure, the sequential
+diagnostic, accuracy as a headline, or a Pundit without its `note`.
 
-**#21 is blocked on nothing**, unlike most of what is left. It does *not* need a source of upcoming
-Premier League Fixtures: the loop's ordinary answer today is "no row in a tier this project
-predicts, exit 0", and proving that runs unattended on the Pi is the whole of the ticket.
+**The standing instruction to run `python -m epl.live upcoming` on a Friday is discharged**, and
+what replaces it is smaller: the schedule now asks twice a week and the answer is recorded in
+`deploy/logs/live_loop.log`. `epl.v2.api_football.FETCHES_MEASURED` holds four fetches as of 28 Aug
+2026 and `PREMIER_LEAGUE_ROWS_SEEN` is `10`. Append to it when a fetch is taken by hand and tells
+you something the log does not.
 
-What is left after that is one unproven input and three issues worth filing.
+**Two issues worth filing, neither in scope anywhere yet:**
 
-**The schedule was built knowing it will seal nothing, and that is not a contradiction.** #19's
-fourth acceptance criterion names the case by name — "the *only* case until upcoming Fixtures have a
-source" — so the ticket was written to be built despite the blocker rather than after it. The
-schedule is installed now so that the day upstream starts listing Premier League Fixtures, the loop
-is already watching. What it cannot do is tell anybody that day has come: a fire that finds no E0 row
-is a quiet success by design, so the loop will simply start sealing rounds and nothing will announce
-it. `deploy/logs/live_loop.log` is where that shows up.
-
-**The one thing to re-check periodically**: run `python -m epl.live upcoming` on a Friday afternoon
-of a Premier League round — or just read the log, which now asks twice a week. If `fixtures.csv`
-carries E0 rows, the live half works and `seal` will write, commit and push the round. If it does
-not, upcoming Premier League Fixtures still have no confirmed source and that is the blocker for
-everything live — including the weekly Season Projection. Whatever it says, record the date and the
-result in three places: beside the fetch table in docs/DECISIONS.md, in
-`epl.v2.api_football.FETCHES_MEASURED`, and — if a Premier League row ever appears — in
-`PREMIER_LEAGUE_ROWS_SEEN`, which is the number that decides whether that stub stays a stub. Three
-fetches are recorded there as of 27 Aug 2026 and all three found nothing.
-
-**#20 is filed and open, and is blocked by #21: a Telegram bot** — seal and score notifications,
-and the board on demand.
-Its first acceptance criterion is the gap #19 closed leaving open: the schedule now asks upstream
-twice a week whether `fixtures.csv` carries a Premier League row, and a fire that finds none is a
-quiet success, so *nothing announces the day the answer changes*. A bot is what would. Note the
-constraints the ticket carries — it must be read-only with respect to both stores (a chat app is not
-a second door into `outputs/live/`), and it must not quote a calibrated Live Season figure, the
-sequential diagnostic, accuracy as a headline, or a Pundit without its `note`.
-
-**Three issues worth filing, none of them in scope anywhere yet:**
-
-- **A confirmed source of upcoming Premier League Fixtures.** The live loop is complete, scheduled
-  and idle without one. API-Football is the named candidate and `epl.v2.api_football` is where the
-  case for it lives — including the conditions that would revive it. #20 is partly blocked on it
-  too, though the useful half of that ticket is not.
-- **The live Season Projection.** `projection_rounds(..., live=True)` exists and `slate_at` cannot be
-  fed: a projection needs every remaining Fixture of the campaign, and the rolling file's horizon is
-  two days. Blocked on the same source as above.
+- **The live Season Projection.** `projection_rounds(..., live=True)` exists and `slate_at` cannot
+  be fed: a projection needs every remaining Fixture of the campaign, and the fourth fetch reached
+  three days ahead. This is now the strongest surviving entry in `WHAT_WOULD_REVIVE_IT` and the main
+  argument left for a second Fixture source — the sealing half no longer needs one.
 - **Eight more Seasons of Pundit calls.** The archive's index links eighteen Season pages, 2009/10
   onward, where the backfill uses nine. The eight before 2017/18 are ~3,000 more Lawrenson calls on
   the same source in the same shape.

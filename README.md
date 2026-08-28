@@ -68,7 +68,7 @@ Hyperparameters are tuned only on the Burn-In Window (2000/01–2004/05) and fro
 | Source | Use | Coverage |
 |---|---|---|
 | Football-Data.co.uk `E0`–`E3` | results, match stats, odds | 2000/01– , four tiers |
-| Football-Data.co.uk `fixtures.csv` | upcoming Fixtures + Market Line | rolling; **no E0 row seen yet** |
+| Football-Data.co.uk `fixtures.csv` | upcoming Fixtures + Market Line | rolling; **regenerated irregularly** |
 | MyFootballFacts | Pundit backfill (Lawrenson, Sutton) | 2017/18–2025/26, 3,408 rows, frozen |
 | MyFootballFacts | Pundit calls for the Season in progress | ~a round behind the football |
 | ~~BBC Sport~~ | ~~live Pundit predictions~~ | **not used — see below** |
@@ -113,7 +113,7 @@ top of it. The tracker's `Blocked by` fields are authoritative where the two dis
 XGBoost / ML layer, the Golden Boot player model, and the API-Football client. Each gets a written
 stub explaining what it would do and what it needs. API-Football was deferred because `fixtures.csv`
 already carries upcoming Fixtures with the Market Line, free and unauthenticated — a premise stage 13
-measured and could not confirm. See [The live loop](#the-input-is-the-part-that-is-not-proven).
+could not confirm and stage 16 confirmed. See [The live loop](#the-input-and-what-it-took-to-prove-it).
 
 The stubs are in **`src/epl/v2/`** — prose and named constants, no implementation. They are Python
 modules rather than a docs page so that "nothing in the pipeline imports one" is a thing a test can
@@ -121,9 +121,12 @@ check, and `tests/v2/test_stubs_are_unreachable.py` checks it: deleting the dire
 import and move no number. Each carries its entry price as a `WHAT_IT_NEEDS` tuple, because the
 sentence a stub loses first is the one saying what it would take to pick it up.
 
-`api_football.py` is the live one. It holds the three fetches that failed to find a Premier League row
-(`FETCHES_MEASURED`), the count that decides the question (`PREMIER_LEAGUE_ROWS_SEEN`, currently 0),
-and the conditions that would revive the client.
+`api_football.py` is the live one. It holds every fetch of the rolling fixtures file
+(`FETCHES_MEASURED`) and the count that decides the question (`PREMIER_LEAGUE_ROWS_SEEN`, now **10**:
+three fetches found no Premier League row and the fourth, taken from the Pi on the Friday of a round,
+found the whole round with market averages attached). That settles the premise the client was
+deferred on, in favour of staying deferred — the conditions that would still revive it are in
+`WHAT_WOULD_REVIVE_IT`, and a live Season Projection is now the strongest of them.
 
 ## Layout
 
@@ -293,9 +296,11 @@ weekly and told nobody anything; that Season is checked for being present and pa
 
 `tests/live/test_live_loop_over_the_corpus.py` is the one that cannot be done with two invented
 Clubs: it registers all nine Predictors against the real corpus and pins which four can speak to a
-Fixture nobody has played. Its Fixtures are hand-built, and the file says so — Football-Data's rolling
-file has never been seen carrying a Premier League row, so a real upcoming round is exactly what
-cannot be obtained. Nothing it asserts depends on who is playing whom.
+Fixture nobody has played. Its Fixtures are hand-built, and the file says so — when it was written,
+Football-Data's rolling file had never been seen carrying a Premier League row, so a real upcoming
+round was exactly what could not be obtained. One can be now, and the test should stay hand-built
+anyway: a fixture list that changes every week is not something to assert against. Nothing it
+asserts depends on who is playing whom.
 
 ## Predictions, the ledger and the scoreboard
 
@@ -404,46 +409,51 @@ weighed and rejected: it would re-fetch the whole raw cache twice a week forever
 in exchange is that **a round whose window passes while the Pi is off is lost** — open risk 6.
 See docs/DECISIONS.md, "The schedule, and where it runs".
 
-### The input is the part that is not proven
+### The input, and what it took to prove it
 
-The loop is built and tested end to end. What it reads is not. Football-Data's rolling
-`fixtures.csv` is the only confirmed source of upcoming Premier League Fixtures with a Market Line,
-and **on every fetch so far it has held none**:
+The loop is built and tested end to end, and for three fetches what it reads was not. Football-Data's
+rolling `fixtures.csv` is the only confirmed source of upcoming Premier League Fixtures with a Market
+Line, and **the first three fetches held none. The fourth held the whole round**:
 
 | Fetched | Upstream `Last-Modified` | Rows | E0 rows |
 |---|---|---|---|
 | 2026-08-21 06:33 UTC — 2026/27 round 1 kicked off that evening | not recorded | 3 | **0** |
 | 2026-08-27 06:12 UTC — the day before round 2 | Tue 25 Aug 09:59 GMT | 5 | **0** |
 | 2026-08-27 14:21 UTC — same day, eight hours later | Tue 25 Aug 09:59 GMT | 5 | **0** |
+| 2026-08-28 15:12 UTC — **from the Pi**, the Friday of a round | Fri 28 Aug 12:01 GMT | 197 | **10** |
 
-Every time, the file held only Fixtures dated on or before the day it was generated — one League One
-tie and two Spanish on the first, one National League tie and four Spanish on the other two — and the
-second was already two days stale. So the file is regenerated irregularly and its forward horizon at
-generation time is a couple of days, which is shorter than a Prediction Round's own window.
+On each of those three, the file held only Fixtures dated on or before the day it was generated — one
+League One tie and two Spanish on the first, one National League tie and four Spanish on the other
+two — and the second was already two days stale. That looked like a forward horizon of a couple of
+days, shorter than a Prediction Round's own window. It was not; see below.
 
 The third fetch came back **byte-identical** to the second, eight hours later on the eve of a round:
 same md5, same `Last-Modified`. That rules out the hopeful reading of the first two — a fetch timed
 later in the day would not have caught a fresher batch, because upstream had not written one in two
 and a half days.
 
-The first fetch's `E2` row is worth noticing: this is not a file that omits English football. It has
-carried an English tier this project ingests. It has never been seen carrying the one tier this
-project predicts.
+The first fetch's `E2` row is worth noticing: this was never a file that omits English football. It
+has carried an English tier this project ingests. It had simply not been seen carrying the one tier
+this project predicts.
 
-This is issue #17's open risk 2, and it is **documented rather than closed**. Three fetches are not
-proof that a Premier League row never appears; they are proof that one has not been seen yet, and
-that nothing in this project should assume one will. `python -m epl.live upcoming` is what answers the
-question on any given day, and it answers it without writing anything.
+**The fourth fetch settled it.** Taken from the Pi at 15:12 UTC on Friday 28 Aug 2026, it returned
+197 rows, **10 of them `E0`** — the whole of that evening's round, with the market averages attached
+— and the round was sealed. So open risk 2 is closed, and what it leaves behind is narrower: the
+file is reliable in shape but not in *time*, because upstream regenerates it irregularly and a fetch
+that lands between regenerations sees a stale one. That is open risk 7. `python -m epl.live upcoming`
+is still what answers the question on any given day, without writing anything.
 
-Issue #19's schedule now asks it twice a week, which changes who is watching rather than what the
-answer is. A fire that finds no Premier League row is a quiet success by design, so the evidence
-accumulates in `deploy/logs/live_loop.log` — and **nothing will announce the day the answer
-changes.** The loop will simply start sealing rounds.
+Issue #19's schedule asks it twice a week, which changed who was watching rather than what the answer
+was. A fire that finds no Premier League row is a quiet success by design, so **nothing announced the
+day the answer changed** — it was noticed because a person happened to be running the loop by hand
+while deploying it. That is unchanged as a property of the system and is most of the argument for
+issue #20's bot: open risk 6 and open risk 7 both look exactly like a quiet week in
+`deploy/logs/live_loop.log`, and both now cost a real round.
 
 The consequence reaches [Deferred to v2](#deferred-to-v2): the reason given for not needing an
-API-Football client is that "`fixtures.csv` already carries upcoming Fixtures with the Market Line".
-That premise is exactly what is in doubt, and issue #18's stub records the measurement rather than
-the assumption.
+API-Football client is that "`fixtures.csv` already carries upcoming Fixtures with the Market Line",
+and that premise now holds. The client stays deferred for its original reason, and issue #18's stub
+records the measurement — `PREMIER_LEAGUE_ROWS_SEEN = 10` — rather than the assumption.
 
 ## The market benchmarks
 

@@ -22,11 +22,26 @@
 # next one is sealed. It ingests the Live Season and rebuilds the match table itself, so nothing
 # else has to run first.
 #
-# CRON_TZ is what makes 16:00 mean 16:00 in London on a Pi whose own clock is not. Debian's cron
-# honours it; if this Pi's cron does not, the consequence is mild and worth knowing — the loop
-# would fire outside the window and exit 0 having sealed nothing, because the window is judged in
-# UK time by the code (epl.ledger.live.uk_now) whatever cron believes. A misconfigured schedule
-# here seals nothing; it cannot seal something wrongly.
+# CRON_TZ is what makes 16:00 mean 16:00 in London on a Pi whose own clock is not.
+#
+# DO NOT ASSUME IT WORKS. It was written here believing Debian's cron honours it, and on the Pi this
+# was first deployed to — Raspberry Pi OS, cron 3.0pl1-197 — it is **ignored**. Measured 28 Aug 2026
+# by the probe in deploy/SETUP.md step 8: an entry at 16:29 under CRON_TZ=Europe/London did not fire
+# at 11:29 EDT, and an entry at 11:32 fired at 11:32 EDT exactly. Cron read the system zone.
+#
+# Check before trusting it, because the consequence is NOT mild on a machine whose own zone is
+# behind the UK. The comment here used to say it was: "the loop would fire outside the window and
+# exit 0 having sealed nothing". That is true of a clock that runs early and false of one that runs
+# late — on a Pi set to America/New_York these times land five hours after they read, so 18:30
+# becomes 23:30 in London, past a 20:00 first kickoff, and the round is gone rather than deferred.
+# Sealing nothing every week is exactly as quiet as having nothing to seal.
+#
+# What is still true: the window is judged in UK time by the code (epl.ledger.live.uk_now) whatever
+# cron believes, so a wrong hour here cannot seal something *wrongly*. It can only miss it.
+#
+# If the probe shows CRON_TZ is ignored, apply SETUP.md step 8's fallback: convert the three times
+# into the Pi's own zone and DELETE this line — leaving it while the times are already converted
+# means a future cron that starts honouring it shifts them a second time.
 CRON_TZ=Europe/London
 
 # m  h  dom mon dow  command

@@ -1,8 +1,8 @@
-"""An API-Football client, deferred out of v1 — on a premise that is now in doubt (decision 12).
+"""An API-Football client, deferred out of v1 — on a premise since confirmed (decision 12).
 
-**What it would do.** Supply the one input the live loop cannot currently confirm: the Premier
-League Fixtures of an upcoming Prediction Round, with enough lead time to seal Predictions before
-the first kickoff, and ideally with pre-match odds attached. :mod:`epl.live.upcoming` already turns
+**What it would do.** Supply the Premier League Fixtures of an upcoming Prediction Round, with
+enough lead time to seal Predictions before the first kickoff, and ideally with pre-match odds
+attached. :mod:`epl.live.upcoming` already turns
 a table of upcoming Fixtures into a sealable round and :mod:`epl.live.seal` already writes and
 commits it, so a client would be an alternative *source* behind an interface that exists, not a new
 stage. It would need an account and an API key, which is why the free file was preferred.
@@ -13,16 +13,19 @@ Football-Data covers with ``Avg*`` market-average odds on each row. That is the 
 source in the same shape the corpus uses, so a paid API would have bought a second spelling of data
 already in hand.
 
-**Why that reason no longer holds up, and what the ticket therefore records.** Issue #18 asks this
-stub to say what would have to change for the premise to stop being true. Stage 13 went looking, and
-the honest answer is that *the premise was never confirmed in the first place*. ``fixtures.csv`` has
-never been observed carrying a Premier League row.
+**Why that reason was doubted for three fetches, and how the doubt was settled on the fourth.**
+Issue #18 asks this stub to say what would have to change for the premise to stop being true. Stage
+13 went looking and could not confirm it: ``fixtures.csv`` had never been *observed* carrying a
+Premier League row, so the stated reason for deferring this client was an assumption rather than a
+measurement. Stage 15 put the question on a timer and stage 16 ran it from the Pi, where it came
+back the other way. **The premise holds.** See "The fourth fetch" below.
 
-Three fetches, recorded in ``FETCHES_MEASURED`` below and in docs/DECISIONS.md under "Measured at
-stage 13". All found a file holding only Fixtures dated on or before the day it was generated: one
-League One tie and two Spanish on the first, one National League tie and four Spanish on the other
-two. The second file was two days stale by its own ``Last-Modified`` header, and even that batch —
-generated three days before a Premier League round — carried none.
+The three fetches that could not confirm it are recorded in ``FETCHES_MEASURED`` below and in
+docs/DECISIONS.md under "Measured at stage 13". All found a file holding only Fixtures dated on or
+before the day it was generated: one League One tie and two Spanish on the first, one National
+League tie and four Spanish on the other two. The second file was two days stale by its own
+``Last-Modified`` header, and even that batch — generated three days before a Premier League round
+— carried none.
 
 The third fetch was taken eight hours after the second, on the eve of a Premier League round, and
 came back **byte-identical** to it: same md5, same ``Last-Modified``. So the file is not merely
@@ -30,17 +33,31 @@ short-horizoned, it is regenerated irregularly enough to sit unchanged for two a
 across a matchday — which rules out the reading that a fetch timed later in the day would have
 caught a fresher batch.
 
-Two details keep this from being a network problem or a parsing problem. The first fetch carried an
-``E2`` row, so this is not a file that omits English football; it has simply never been seen
-carrying the one tier this project predicts. And the results half of the same upstream is fine —
-``mmz4281/2627/E0.csv`` exists and parses. What is missing is specifically the *forward* horizon,
-which at the moment of generation is a couple of days, shorter than a Prediction Round's own sealing
-window.
+Two details kept that from being a network problem or a parsing problem, and both read differently
+now. The first fetch carried an ``E2`` row, so it was never a file that omits English football — it
+had simply not been *seen* carrying the one tier this project predicts. And the results half of the
+same upstream was fine throughout: ``mmz4281/2627/E0.csv`` exists and parses. What looked like a
+missing forward horizon of a couple of days was those three files, not the feed.
 
-**Three fetches cannot prove a negative**, which is why this is documented rather than closed, and
-why ``python -m epl.live upcoming`` asks the question on any given day and writes nothing. Run it on
-the Friday of a Premier League round before doing anything with this module. If E0 rows are there,
-the premise holds and this stub stays a stub.
+**Three fetches cannot prove a negative**, which is why that was documented rather than closed, and
+why ``python -m epl.live upcoming`` asks the question on any given day and writes nothing.
+
+**The fourth fetch.** Taken from the Pi on Friday 28 Aug 2026 at 15:12 UTC — the Friday of a Premier
+League round, which is the timing every note above asks for — and it came back carrying **197 rows,
+10 of them ``E0``**: the whole of the round beginning that evening, out to a Fixture three days
+later, each row with the ``AvgH``/``AvgD``/``AvgA`` market averages the Market Line is built from.
+``Last-Modified`` was 12:01 GMT the same morning, three hours before the fetch.
+
+So the horizon measured at stage 13 was a property of those files rather than of the feed. Upstream
+regenerates it irregularly, and a fetch that lands between regenerations sees a stale and nearly
+empty file; a fetch that lands after one sees the round. That is a **sampling** hazard, not an
+absent forward horizon, and it is the reason the loop fetches on a schedule rather than once.
+
+**The consequence for this module is that it stays a stub, and now for its original reason.** The
+deferral was argued from "``fixtures.csv`` already carries upcoming Fixtures with the Market Line,
+free and unauthenticated". That sentence is now measured rather than assumed, so the case for a paid
+authenticated source is *weaker* than when the doubt stood, not stronger. What would revive it is
+below, and "the file never carries a Premier League row" is no longer among the conditions — it has.
 
 Issue #19 changed who asks. The live loop now runs on a schedule, so this question is put to
 upstream twice a week by cron rather than whenever somebody remembers — and a fire that finds no
@@ -49,9 +66,11 @@ consequence for this module is worth stating plainly: **the schedule will not te
 answer changes.** It will simply start sealing rounds. ``deploy/logs/live_loop.log`` is where that
 shows up, and appending a fetch here is still a hand's job.
 
-**What is blocked on it.** More than the seal. A live Season Projection needs every *remaining*
-Fixture of the campaign — :func:`epl.simulate.checkpoints.slate_at` says so in its own docstring —
-and a file with a two-day horizon cannot supply the rest of a Season. Both wait on the same source.
+**What is blocked on it.** No longer the seal — that works, and has. A live Season Projection
+still is: it needs every *remaining* Fixture of the campaign,
+:func:`epl.simulate.checkpoints.slate_at` says so in its own docstring, and the fourth fetch reached
+three days ahead rather than nine months.
+That is the one thing here the rolling file has never been seen to supply.
 
 **And a caution if this is ever picked up.** The reason ADR 0001 benchmarks against pre-match rather
 than closing odds is that the Market Line's information set must match the model's. A paid API's
@@ -63,38 +82,41 @@ comparability to 7,980 scored Fixtures needs establishing rather than assuming.
 
 from __future__ import annotations
 
-#: Every fetch of ``fixtures.csv`` made while stage 13 was measuring the premise, newest last:
+#: Every fetch of ``fixtures.csv`` ever taken by hand, newest last:
 #: ``(fetched, upstream Last-Modified, total rows, Premier League rows)``.
 #:
-#: Kept as data rather than prose so a third fetch is an append and not a rewrite. The pair of them
-#: is evidence of a horizon, not proof of a rule — see the module docstring.
+#: Kept as data rather than prose so a fetch is an append and not a rewrite — which is what the
+#: fourth one was. Three of these are evidence of a horizon and the fourth disproves it as a rule;
+#: see the module docstring. The schedule now asks the same question twice a week and records the
+#: answer in ``deploy/logs/live_loop.log``, so append here only for a fetch taken by hand.
 FETCHES_MEASURED: tuple[tuple[str, str, int, int], ...] = (
     ("2026-08-21 06:33 UTC", "not recorded", 3, 0),
     ("2026-08-27 06:12 UTC", "Tue 25 Aug 2026 09:59 GMT", 5, 0),
     ("2026-08-27 14:21 UTC", "Tue 25 Aug 2026 09:59 GMT", 5, 0),
+    ("2026-08-28 15:12 UTC", "Fri 28 Aug 2026 12:01 GMT", 197, 10),
 )
 
 #: Premier League Fixtures ever observed in the rolling file, across every fetch above.
 #:
-#: The number that decides whether this module stays a stub. While it is zero, the stated reason for
-#: deferring an API-Football client is an assumption rather than a measurement.
+#: The number that decides whether this module stays a stub. While it was zero, the stated reason
+#: for deferring an API-Football client was an assumption; now that it is not, that reason is a
+#: measurement and the case for a paid source is correspondingly weaker.
 #:
 #: It is the last column of ``FETCHES_MEASURED`` summed, and it is written out rather than summed
 #: because a stub holds no implementation — so it must be updated whenever a fetch is appended.
 #: ``tests/v2/test_stubs_are_unreachable.py`` checks the two agree, which is the whole reason it is
 #: safe to state a total in a module that may not compute one.
-PREMIER_LEAGUE_ROWS_SEEN: int = 0
+PREMIER_LEAGUE_ROWS_SEEN: int = 10
 
 #: What would have to become true for this to stop being a stub. Any one of these is enough.
 WHAT_WOULD_REVIVE_IT: tuple[str, ...] = (
-    "`python -m epl.live upcoming`, run on the Friday of a Premier League round, keeps reporting no"
-    " E0 rows — establishing the fetches above as a standing condition rather than a gap. Issue"
-    " #19's schedule now asks this twice a week, so the evidence accumulates in"
-    " deploy/logs/live_loop.log whether or not anybody is reading it",
-    "the rolling file's forward horizon stays shorter than a Prediction Round's sealing window, so"
-    " a Fixture is never listed while there is still time to seal a Prediction for it",
-    "a live Season Projection is wanted, which needs every remaining Fixture of the campaign and"
-    " cannot be fed from a file that is a couple of days wide however reliable it becomes",
+    "the rolling file proves unreliable *in time* rather than absent — the fourth fetch found the"
+    " round, but the three before it found a file upstream had not regenerated in two and a half"
+    " days. A round missed because the only fetch inside its window landed on a stale file is the"
+    " failure this would buy its way out of, and deploy/logs/live_loop.log is where it would show",
+    "a live Season Projection is wanted, which needs every remaining Fixture of the campaign. The"
+    " fourth fetch reached three days ahead, not nine months, so this one is unaffected by it and"
+    " is now the strongest of these conditions",
     "the free file starts omitting the market-average odds columns the Market Line is built from,"
     " leaving the Fixtures usable and the benchmark unfeedable",
 )

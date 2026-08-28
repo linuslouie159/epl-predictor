@@ -53,10 +53,27 @@ services:
     environment:
       EPL_PROJECT_ROOT: /repo
       TZ: Europe/London
-      # Where ssh looks for the key and for known_hosts. Set explicitly because `user:` above gives
-      # the container a uid with no passwd entry, and HOME then defaults to `/` — where ssh finds
-      # no keys, and the push fails for a reason that reads like a credentials problem and is not.
+      # Where most things look for the key and for known_hosts. Set explicitly because `user:` above
+      # may give the container a uid with no passwd entry, in which case HOME defaults to `/` —
+      # where ssh finds no keys, and the push fails for a reason that reads like a credentials
+      # problem and is not.
       HOME: /home/epl
+      # And this is why HOME is not enough, measured at issue #21 on the first real push.
+      #
+      # **OpenSSH does not resolve `~` from $HOME.** It reads the passwd database for the running
+      # uid. The comment above used to assert that uid 1000 has no passwd entry in this image; it
+      # does — `ubuntu`, homed at /home/ubuntu — so ssh looked in /home/ubuntu/.ssh, found no
+      # known_hosts, and failed with `Host key verification failed` while the correct file sat
+      # mounted and readable at /home/epl/.ssh. That error is the first row of SETUP.md step 7's
+      # table, whose stated cause is a skipped `ssh -T`, so it points at exactly the wrong thing.
+      #
+      # Naming both files outright is what makes this independent of the base image's passwd file,
+      # which is a floating `:latest` and free to add or rename a uid-1000 user at any time.
+      # `IdentitiesOnly` stops ssh offering anything else in the mounted directory first.
+      GIT_SSH_COMMAND: >-
+        ssh -i /home/epl/.ssh/id_ed25519
+        -o UserKnownHostsFile=/home/epl/.ssh/known_hosts
+        -o IdentitiesOnly=yes
       # A bind-mounted repository is owned by a different uid than the image was built as, and git
       # refuses to touch one it considers dubiously owned. Set through the environment rather than
       # with `git config --global` at build time, because a global config lives in a HOME this

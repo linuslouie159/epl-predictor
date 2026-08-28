@@ -17,9 +17,11 @@
 # BUILD (from the repository root, so the build context is the project):
 #   docker build -f deploy/Dockerfile -t epl-predictor:live .
 #
-# Building natively on a Pi 5 takes a while — the conda solve is the slow half. Cross-building on a
-# desktop and pushing the result is usually the better trade:
-#   docker buildx build --platform linux/arm64 -f deploy/Dockerfile -t epl-predictor:live --load .
+# Build natively on the Pi. This comment used to recommend cross-building on a desktop with
+# `buildx --platform linux/arm64` and shipping the result, on the strength of a 27-minute amd64
+# build whose conda solve alone was 1450 s. Measured on a Pi 5 with NVMe on 28 Aug 2026, the whole
+# native build is **271 s and the solve is 73 s** — six times faster than the machine it was being
+# told to borrow. Cross-building would trade four minutes for QEMU and a 5.76 GB image transfer.
 
 # Miniforge rather than any other base, because it is conda-forge's own image and ADR 0009 chose
 # conda-forge for the prebuilt scientific stack. It is multi-arch, so this builds on aarch64.

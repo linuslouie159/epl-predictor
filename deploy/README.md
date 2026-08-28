@@ -4,13 +4,15 @@ Issue #19. The loop itself is built and documented in `src/epl/live/`; this dire
 part that makes it run without anybody there — an image, a compose file, a wrapper cron calls, and
 the crontab itself.
 
-**Read this first: there is nothing to seal yet.** `fixtures.csv` has never been seen carrying a
-Premier League row — three fetches, 21 and 27 August 2026, the last of them the day before a round
-— so every fire of this schedule will currently report "no row in a tier this project predicts"
-and exit 0. That is the designed behaviour and not a broken install (issue #19, criterion 4). The
-schedule is installed *now* so that the day upstream starts listing Premier League Fixtures, the
-loop is already watching. See docs/DECISIONS.md, "The live loop, and the input it is still waiting
-for", and open risk 2.
+**Read this first: this schedule seals real Prediction Rounds.** It was written when it could not —
+`fixtures.csv` had never been seen carrying a Premier League row across three fetches — and that
+changed on 28 August 2026, when the fourth fetch found a full round and the loop sealed it. So a
+fire that reports "no row in a tier this project predicts" and exits 0 is still designed behaviour
+(issue #19, criterion 4), but it is **no longer the only outcome and no longer the expected one**.
+Two silences now look identical from the log and both cost a round: the Pi being off through a
+window (open risk 6), and every fetch inside a window landing on a copy upstream has not regenerated
+(open risk 7). See docs/DECISIONS.md, "Bringing it up on the Pi, and the first Sealed Prediction
+Round".
 
 ## What runs where
 
@@ -69,7 +71,7 @@ The exit code is the entire interface to cron, so it is worth knowing exactly wh
 | 0 | The round was sealed, committed and pushed | No |
 | 0 | The round was already sealed; nothing written, nothing committed, pushed again | No |
 | 0 | No Prediction Round is inside its window — most of the week | No |
-| 0 | The rolling file held no Premier League Fixture — every fire so far | No, and see open risk 2 |
+| 0 | The rolling file held no Premier League Fixture — a stale upstream copy, or a genuinely empty week | No, but see open risk 7 |
 | 1 | Sealed but **not committed**, or committed and **not pushed** | **Yes** — it is not evidence yet |
 | 1 | `LIVE_SEASON` has gone stale, in either direction | **Yes** |
 | non-zero, with a traceback | Upstream changed the rolling file's shape, or the network failed | **Yes**, unless the 18:30 retry clears it |
