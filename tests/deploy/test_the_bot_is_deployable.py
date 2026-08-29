@@ -101,6 +101,19 @@ class TestTheBotIsAServiceThatComesBack:
 
         assert ".ssh" not in after_live
 
+    def test_its_output_is_not_buffered_away(self) -> None:
+        """Found on the first real start, on the Pi (issue #20).
+
+        Python block-buffers stdout when it is not a terminal, and in a container it never is. A
+        one-shot service flushes when it exits; a long-lived one does not reach the flush, so the
+        bot ran, polled, and logged nothing at all. That is worse than a crash — a crashed container
+        is visibly not running, and this one was `Up 43 seconds` and mute.
+
+        It also silently removes the diagnostic SETUP.md sends an operator to: when the bot answers
+        nobody, the console is supposed to say `refused user id=N`.
+        """
+        assert 'PYTHONUNBUFFERED: "1"' in _read(COMPOSE)
+
     def test_both_halves_of_the_bot_run_the_bot_and_not_the_loop(self) -> None:
         """A service that inherited `python -m epl.live` would seal on a `docker compose up`."""
         compose = _read(COMPOSE)

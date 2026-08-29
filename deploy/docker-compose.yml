@@ -41,6 +41,14 @@ x-environment: &environment
   # The layout module resolves everything from here, and the bind mount lands here.
   EPL_PROJECT_ROOT: /repo
   TZ: Europe/London
+  # Python block-buffers stdout when it is not a terminal, and in a container it never is. That is
+  # harmless for the one-shot services, whose buffer flushes when they exit into the log — and it
+  # made the `bot` service look broken on the first real start (issue #20): the process was alive
+  # and polling, and `docker compose logs bot` was empty, because a long-lived process never
+  # reaches the flush. An unobservable service is indistinguishable from a dead one, and the line
+  # SETUP.md tells an operator to look for when the bot answers nobody — `refused user id=` — is
+  # precisely one of the lines that would never have arrived.
+  PYTHONUNBUFFERED: "1"
   # Where most things look for a home directory. Set explicitly because `user:` below may give the
   # container a uid with no passwd entry, in which case HOME defaults to `/`.
   HOME: /home/epl
