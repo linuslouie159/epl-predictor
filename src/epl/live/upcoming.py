@@ -51,6 +51,29 @@ from epl.windows import LIVE_SEASON, season_label
 #: has finished — which is how a stale :data:`epl.windows.LIVE_SEASON` is caught, not believed.
 CAMPAIGN_FIXTURES = 380
 
+#: How :func:`_nothing_sealable` opens each of its two silences, named rather than only written.
+#:
+#: Both are ordinary prose to a person reading a log, and to :mod:`epl.bot` they are the difference
+#: between "there was no Premier League football this week" and "upstream served us a stale file"
+#: (docs/DECISIONS.md, open risk 7). That reader has nothing else to go on: both silences are a
+#: :class:`NothingToSeal` and both exit 0, which is exactly what issue #19 asked for and exactly
+#: what makes them indistinguishable afterwards. Constants so that rewording a message cannot
+#: quietly blind the only thing watching for the risk — and so the coupling is visible from here
+#: rather than only from the far end of it.
+NO_FIXTURE_TO_PREDICT = "no Fixture to predict"
+NONE_INSIDE_A_WINDOW = "no Prediction Round is inside its sealing window"
+
+#: How every fire announces which copy of the rolling file it read.
+#:
+#: Printed by :func:`epl.live.__main__._rolling` and defined here with the other two, so the three
+#: lines of the loop's output that another program reads are in one place. That other program is
+#: :mod:`epl.bot`, and this is the line it needs for the question the exit code cannot answer: two
+#: fires inside one round's window that named two cached copies with the *same bytes* saw a file
+#: upstream had not regenerated. Checkable at all only because each fetch is kept under the instant
+#: it was taken (:func:`epl.ingest.fixtures.raw_fixtures_path`), which makes the printed name a
+#: durable handle on exactly what that fire saw.
+ROLLING_FILE_PREFIX = "rolling file: "
+
 #: Canonical column order for :func:`rounds` — :data:`epl.rounds.ROUND_COLUMNS` and the verdict.
 ROUND_STATUS_COLUMNS: tuple[str, ...] = (
     "prediction_round",
@@ -225,7 +248,7 @@ def _nothing_sealable(table: pd.DataFrame, now: pd.Timestamp) -> str:
     """Say which of the two silences this is: an empty file, or a clock outside every window."""
     if table.empty:
         return (
-            f"no Fixture to predict at {pd.Timestamp(now).isoformat()}. The rolling file held no "
+            f"{NO_FIXTURE_TO_PREDICT} at {pd.Timestamp(now).isoformat()}. The rolling file held no "
             "row in a tier this project predicts — measured on 27 August 2026, one day before a "
             "Premier League round, it held one National League Fixture and four Spanish ones"
         )
@@ -234,7 +257,7 @@ def _nothing_sealable(table: pd.DataFrame, now: pd.Timestamp) -> str:
         for _, row in table.iterrows()
     )
     return (
-        f"no Prediction Round is inside its sealing window at {pd.Timestamp(now).isoformat()}; "
+        f"{NONE_INSIDE_A_WINDOW} at {pd.Timestamp(now).isoformat()}; "
         f"the rolling file holds {held}. A round is sealable from its As-Of Instant until its "
         "first kickoff, and not before or after (ADR 0005)"
     )
@@ -243,7 +266,10 @@ def _nothing_sealable(table: pd.DataFrame, now: pd.Timestamp) -> str:
 __all__ = [
     "CAMPAIGN_FIXTURES",
     "KICKED_OFF",
+    "NONE_INSIDE_A_WINDOW",
     "NOT_OPEN",
+    "NO_FIXTURE_TO_PREDICT",
+    "ROLLING_FILE_PREFIX",
     "ROUND_STATUS_COLUMNS",
     "SEALABLE",
     "LiveError",

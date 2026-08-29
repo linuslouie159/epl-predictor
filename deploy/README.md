@@ -22,6 +22,8 @@ Round".
 | The code, the corpus, `outputs/live/` | a normal `git clone` on the Pi, bind-mounted at `/repo` |
 | The schedule | the Pi's own crontab (`deploy/crontab`) |
 | The logs | `deploy/logs/live_loop.log` on the Pi, gitignored |
+| The Telegram bot | the same image, service `bot`, `up -d` and restarting (issue #20) |
+| The bot's token and allowlist | `deploy/.env` on the Pi, gitignored |
 
 The image is the *environment*, not the project. `git pull` on the Pi updates the code with no
 rebuild, and the sealed rounds land in a checkout you can inspect and push by hand.
@@ -117,6 +119,39 @@ conflict markers in it and `outputs/live/` inside that checkout; the one directo
 repository that is evidence is the last one that should be repaired by a script running alone at
 night. A red job asking a person to merge is the cheaper failure.
 
+## The Telegram bot (issue #20)
+
+Two processes out of one image, and they are opposite shapes on purpose.
+
+```bash
+# the long-lived half: polls Telegram, answers /round /live /board /health
+docker compose -f deploy/docker-compose.yml up -d bot
+
+# the short-lived half: deploy/run_live.sh calls this itself after every fire
+docker compose -f deploy/docker-compose.yml run --rm notify notify seal
+
+# neither of the above, and no token needed: what would the bot say right now?
+docker compose -f deploy/docker-compose.yml run --rm notify check
+```
+
+Put `EPL_TELEGRAM_TOKEN` and `EPL_TELEGRAM_ALLOWED_IDS` in `deploy/.env` (see `.env.example`). With
+neither set, nothing changes: `notify` prints "not sending" and exits 0, and `serve` refuses to
+start rather than running an open bot.
+
+Four things worth knowing before touching it:
+
+- **It cannot write to either Prediction store**, and that is checked structurally rather than
+  promised — `tests/bot/test_the_bot_is_read_only.py` walks every import and every call in
+  `src/epl/bot/`. A chat app must not be a second door into `outputs/live/` (ADR 0005).
+- **It never sees the deploy key.** The ssh mount is on the `live` service alone. The bot is the
+  only long-lived process here and the only one taking input from outside the machine.
+- **It restarts and the loop's containers do not.** A bot that is not running hears nothing, so it
+  carries `restart: unless-stopped`; a *loop* container that restarted after a crash would look
+  exactly like one with nothing to seal, which is most weeks.
+- **Only one may poll a token.** A second `up -d bot` fails on the lock file; a second poller on
+  another machine is caught by Telegram's 409 and stops. Both matter, because two pollers do not
+  conflict visibly — they split the updates, and the half that arrives looks like it is working.
+
 ## Things not to do
 
 - **Do not add a `--now` flag** so a missed round can be sealed late. `epl.live.__main__.clock` is
@@ -131,3 +166,9 @@ night. A red job asking a person to merge is the cheaper failure.
 - **Do not set the container's `TZ` to fix a scheduling problem.** Nothing depends on it any more —
   `epl.ledger.live.uk_now` converts explicitly — so changing it will look like it helped and will
   not have.
+- **Do not give the bot a command that writes.** Not `/seal`, not `/score`, not "just a `/refresh`".
+  Everything the loop does is timed against a moment nobody chose, and a message from a phone is the
+  shortest route in the whole system to a Sealed Prediction that was not.
+- **Do not let a notify failure fail the run.** `deploy/run_live.sh` exits with the *loop's* code
+  and `python -m epl.bot notify` exits 0 whatever happens. Monitoring that can take down the thing
+  it monitors is worse than none.

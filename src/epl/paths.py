@@ -48,3 +48,14 @@ def backtest_dir() -> Path:
 def live_dir() -> Path:
     """Sealed Predictions. Append-only, committed, never rewritten (ADR 0005)."""
     return outputs_dir() / "live"
+
+
+def live_scoreboard_path() -> Path:
+    """Where the Live Season is scored, apart from the Evaluation Window's board.
+
+    Here rather than in :mod:`epl.live.__main__`, where it began, because two modules now need to
+    name this file and one of them is a library: :mod:`epl.bot.notify` asks whether a `score` fire
+    wrote it. A library importing a ``__main__`` to learn a filename is the wrong direction, and it
+    drags that command's fetchers into the importing process.
+    """
+    return outputs_dir() / "live_scoreboard.csv"

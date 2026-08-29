@@ -41,14 +41,10 @@ from epl.ingest import (
 from epl.ledger import live as store
 from epl.ledger import scoreboard
 from epl.live import seal, upcoming
-from epl.paths import outputs_dir
+from epl.live.upcoming import ROLLING_FILE_PREFIX
+from epl.paths import live_scoreboard_path
 from epl.predictors import Corpus
 from epl.windows import LIVE_SEASON, season_label
-
-
-def live_scoreboard_path() -> Path:
-    """Where the Live Season is scored, apart from the Evaluation Window's board."""
-    return outputs_dir() / "live_scoreboard.csv"
 
 
 def clock() -> pd.Timestamp:
@@ -149,7 +145,7 @@ def _rolling(matches: pd.DataFrame, *, cached: bool) -> pd.DataFrame:
             )
     else:
         path = fetch_fixtures()
-    print(f"rolling file: {path.name}")
+    print(f"{ROLLING_FILE_PREFIX}{path.name}")
     return upcoming.to_predict(parse_fixtures(path), matches)
 
 

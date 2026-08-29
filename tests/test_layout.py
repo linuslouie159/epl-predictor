@@ -22,6 +22,10 @@ MODULES = (
     "epl.simulate",
     "epl.ledger",
     "epl.live",
+    # The Telegram bot (issue #20). Here rather than under `epl.live` because it is not part of the
+    # loop and must never become part of it: it reports on both stores and can write to neither
+    # (ADR 0005), which `tests/bot/test_the_bot_is_read_only.py` checks structurally.
+    "epl.bot",
     # In the README's layout and in no build order: the deferred features, written down rather than
     # built (decision 12, issue #18). It is here because the README documents it and this list is
     # what keeps the two in step — and because "importing it costs nothing" is a claim worth

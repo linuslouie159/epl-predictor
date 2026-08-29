@@ -173,6 +173,10 @@ src/epl/live/           the live loop: the upcoming round, the seal, the retrosp
 src/epl/live/upcoming.py   the rolling fixtures file -> the one round that can be sealed now
 src/epl/live/seal.py       every registered Predictor over that round, sealed and committed
 outputs/live_scoreboard.csv  the Season in progress, scored on its own board; gitignored
+src/epl/bot/            the Telegram bot: what the schedule did, and the boards on demand
+src/epl/bot/fires.py       deploy/logs/live_loop.log -> the fires that wrote it
+src/epl/bot/watch.py       open risks 6 and 7, turned into things worth interrupting somebody for
+src/epl/bot/answers.py     every message, and the numbers it may not put in one
 src/epl/v2/             the deferred features, written down rather than built — no code runs here
 deploy/                 the schedule: the image, the compose file, the cron wrapper, the crontab
 deploy/SETUP.md         the Pi runbook: Docker, deploy key, image, cache, smoke test, crontab
@@ -446,9 +450,24 @@ is still what answers the question on any given day, without writing anything.
 Issue #19's schedule asks it twice a week, which changed who was watching rather than what the answer
 was. A fire that finds no Premier League row is a quiet success by design, so **nothing announced the
 day the answer changed** — it was noticed because a person happened to be running the loop by hand
-while deploying it. That is unchanged as a property of the system and is most of the argument for
-issue #20's bot: open risk 6 and open risk 7 both look exactly like a quiet week in
+while deploying it. Open risk 6 and open risk 7 both look exactly like a quiet week in
 `deploy/logs/live_loop.log`, and both now cost a real round.
+
+**Stage 17's bot is what reads that silence** (`epl.bot`, issue #20). It cannot tell an empty week
+from a lost round either — nothing can, from one fetch — but it can tell that *upstream did not
+regenerate the file between the two fires*, which is the same question asked in a form that has an
+answer. Every fetch is cached under the instant it was taken, so two fires naming two copies with
+identical bytes is a fact on disk rather than an inference:
+
+```
+python -m epl.bot check      # what the bot would say about the schedule, sending nothing
+python -m epl.bot serve      # poll for commands: /round /live /board /health
+python -m epl.bot notify seal   # what deploy/run_live.sh calls after every fire
+```
+
+It is read-only with respect to both stores and cannot seal, supersede, backfill or score. That is
+ADR 0005 at a new door, and it is checked by walking the package's own imports and calls rather than
+by inspection — `tests/bot/test_the_bot_is_read_only.py`.
 
 The consequence reaches [Deferred to v2](#deferred-to-v2): the reason given for not needing an
 API-Football client is that "`fixtures.csv` already carries upcoming Fixtures with the Market Line",

@@ -198,6 +198,22 @@ Do not "fix" these without reading the linked ADR first:
   right for the backfill and wrong for #16. `live.build` filters and hands the rest to the frozen
   builder, so there is one implementation of what a listing becomes. Measured, `unplaced` is empty
   on every live page seen — which is why anything in it is worth reading.
+- **The bot announces almost nothing, and the tests are mostly about the silence.** `epl.bot.notify`
+  is fired after *every* scheduled run and speaks on four of them: a round sealed, a round scored, a
+  run that failed, and two silent fires that read a rolling file with identical bytes. The retry
+  finding the round already sealed says nothing, and so does an ordinary quiet week. A bot that
+  announced every fire is a bot nobody reads by November — the same argument that made
+  `NothingToSeal` exit 0 (issue #19), arriving at a different door.
+- **The bot's two halves report different risks and must not be merged.** `notify` is started by a
+  fire, so it can report open risk 7 (this round's two fires read the same stale bytes) and cannot
+  report open risk 6 (there was no fire). `serve` outlives the fires, reports 6, and dedupes in
+  memory. Moving `absent` into `notify` would repeat one fortnight-long gap three times a day.
+- **`epl.bot.fires.uk_now` exists beside `epl.ledger.live.uk_now` and returns a different thing.**
+  The ledger's is naive because every instant it compares against is naive — an As-Of Instant and a
+  kickoff come off Football-Data as UK wall-clock with no zone. The bot's is aware because every
+  instant *it* compares against carries an offset: `deploy/run_live.sh` stamps each block with
+  `date '+... %z'` on a machine whose zone is nobody's decision. Mixing them raises rather than
+  misreports, which is the only reason both are safe to have.
 - **`src/epl/v2/` is a package nothing imports, and that is its whole specification.** Three
   deferred features written down instead of built (decision 12): prose, named constants, no
   functions and no classes. It is Python rather than Markdown so that "the pipeline does not import
@@ -217,6 +233,12 @@ Do not "fix" these without reading the linked ADR first:
   `python -m epl.ledger backfill`. The first hands an operator the one lie this store exists to
   prevent; the second would regenerate Predictions the live loop had sealed (ADR 0005) and move the
   Evaluation Window's numbers on a timer.
+- Never give the Telegram bot a command that writes — not `/seal`, not `/score`, not a `/refresh`.
+  A chat app is not a second door into `outputs/live/` (ADR 0005), and it is the one surface here
+  that takes input from off the machine.
+- Never let a notify failure change what the loop's exit code says. `deploy/run_live.sh` exits with
+  the loop's code and `python -m epl.bot notify` exits 0 whatever happens inside it. Monitoring that
+  can take down the thing it monitors is worse than none.
 
 ## Status
 
@@ -467,6 +489,58 @@ Eight things about stage 16 worth knowing:
 - **The aarch64 build is fast and `environment.yml` needed no exception** — 271 s in total, 73 s of
   conda solve, against 1450 s of solve on amd64. The advice to cross-build was written from the
   amd64 number and was wrong; it has been removed from SETUP.md.
+
+**Stage 17 is built**: the Telegram bot (`src/epl/bot/`, issue #20) — the push half fired by
+`deploy/run_live.sh` after every scheduled run, the pull half polling for commands as the only
+long-lived process this project has, and both of them unable to write a Prediction.
+`python -m epl.bot check | serve | notify seal`.
+
+**What it is actually for is the loop's silence.** The ticket's original first criterion — announce
+the day `fixtures.csv` first carries a Premier League row — was overtaken on 28 Aug 2026 and was
+rewritten before this was built. What replaced it is open risk 7, and it recurs.
+
+Nine things about stage 17 worth knowing:
+
+- **Nothing can tell an empty week from a lost round, and the bot does not claim to.** It answers a
+  narrower question that has an answer: did upstream regenerate `fixtures.csv` between the round's
+  two fires? Two fires naming two cached copies with **identical bytes** did not see a new file, so
+  whether there was football is exactly what the loop could not learn. Bytes rather than the
+  ticket's suggested `Last-Modified`, because the fetcher records no headers and the cached copies
+  are already on disk. The message says nobody can tell, never that a round was lost — that would be
+  wrong through most of the summer, and a channel that is wrong all summer is not read in September.
+- **Open risk 6 is reported retrospectively and this is not a dead man's switch.** A Pi that is off
+  runs no bot either, so an outage *in progress* is reported by nobody. `epl.bot.watch.absent`
+  speaks when the machine comes back. Closing it needs a second host, which is the argument the Pi
+  won at stage 15 and would have to lose.
+- **The push half speaks about the fire that happened; the pull half about the ones that did not.**
+  A notifier is started *by* a fire, so it cannot observe an absent one — and open risk 6's finding
+  spans a fortnight, so a notifier would repeat the same gap three times a day until it scrolled out
+  of the lookback. Do not move `absent` into `notify`.
+- **It decides from artefacts, never from the loop's prose.** A `seal` that sealed leaves a file
+  under `outputs/live/` newer than the fire; a `score` that scored leaves `outputs/live_scoreboard.csv`
+  newer than it. Matching on "sealed 40 Predictions from 4 Predictors" would let a reworded log line
+  silence the bot, which is the one failure a notifier must not have.
+- **Three lines of the loop's output are read, and all three are named constants in
+  `epl.live.upcoming`** — `NO_FIXTURE_TO_PREDICT`, `NONE_INSIDE_A_WINDOW` and `ROLLING_FILE_PREFIX`.
+  The first two are the whole of what separates the two silences that both exit 0. The third moved
+  out of `epl.live.__main__` because a library importing a `__main__` dragged the ingest's fetchers
+  into the bot's process.
+- **Read-only is checked by walking the source, and the claim is narrower than it looks.** Nothing
+  makes a Python process incapable of calling a function in a loaded module, and `epl.ledger.live`
+  is loaded here — `answers` reads the store through it. What
+  `tests/bot/test_the_bot_is_read_only.py` proves is that **no file under `src/epl/bot/` names a
+  writing door, by import or by call**. The call sweep is the half that matters: `from epl.ledger
+  import live as store` is a correct import, and `store.seal(rows)` under it would pass an import
+  check.
+- **Most fires say nothing and the tests are mostly about that.** Two of the three crontab lines are
+  `seal --push` and the second is a retry designed to find the round already sealed.
+- **`/board` refuses rather than recites.** `outputs/scoreboard.csv` is gitignored and rebuilding it
+  needs `outputs/backtest/`, which nothing on a schedule writes — so the Pi has no Evaluation Window
+  board, and the bot says so and names the commands. Printing the README's numbers would be a bot
+  reporting a measurement it does not hold.
+- **No message has ever been sent to Telegram from this repository.** Everything is tested against a
+  fake transport. `python -m epl.bot check` exists because proving the wiring by sending a real
+  message is the worst available way to find out it is wrong.
 
 **Stage 14 is built**: the deferred-v2 stubs (`src/epl/v2/`, issue #18) — the XGBoost/ML layer, the
 Golden Boot player model and the API-Football client, written down instead of built (decision 12).
@@ -748,24 +822,22 @@ Two things about stage 2 worth knowing before building on it:
 
 ## What to build next
 
-**Every ticket through #21 is built, and #20 is the next one to do.** The modelling stages are done,
-the live loop is built and deployed, the deferred features are written down, and the schedule is
-installed on a Raspberry Pi, has fired unattended, and has pushed.
+**Every filed ticket is built.** The modelling stages are done, the live loop is built and deployed,
+the deferred features are written down, the schedule is installed on a Raspberry Pi and has fired
+unattended and pushed, and the bot that reads its silence is written.
 
 **The situation changed on 28 Aug 2026 and most of what used to be written here is out of date.**
 `fixtures.csv` carried Premier League rows for the first time, the round was sealed, and the project
 now has a live track record of exactly one round. Open risk 2 is closed; open risk 7 replaces it.
 See "Bringing it up on the Pi" in docs/DECISIONS.md before planning anything live.
 
-**#20 is filed, open, and no longer blocked — and it matters more than it did.** A Telegram bot:
-seal and score notifications, and the board on demand. Its first acceptance criterion was that
-nothing announces the day the answer changes. That day has now happened, and it was noticed only
-because a person was watching a terminal. The same is true of every failure mode that remains: open
-risk 6 (the Pi off through a window) and open risk 7 (a stale upstream file inside a window) both
-look exactly like a quiet week from the log, and both now cost a real round. Note the constraints
-the ticket carries — it must be read-only with respect to both stores (a chat app is not a second
-door into `outputs/live/`), and it must not quote a calibrated Live Season figure, the sequential
-diagnostic, accuracy as a headline, or a Pundit without its `note`.
+**The one thing outstanding on #20 is deployment, and it is deliberately not code.** Everything is
+tested against a fake transport and **no message has ever been sent to Telegram from this
+repository**. What remains is `deploy/SETUP.md` step 10 on the Pi: a token in `deploy/.env`, `python
+-m epl.bot check` (which sends nothing), then `docker compose ... up -d bot`. The failures that only
+appear there are deployment's usual ones — a token with a trailing newline, a `.env` compose does
+not load, a container that cannot resolve `api.telegram.org` — and stage 16 is the precedent for
+expecting exactly one of them.
 
 **The standing instruction to run `python -m epl.live upcoming` on a Friday is discharged**, and
 what replaces it is smaller: the schedule now asks twice a week and the answer is recorded in
@@ -823,6 +895,9 @@ python -m epl.live seal        # predict the upcoming round, write it to outputs
 python -m epl.live seal --push # and push it — what makes it evidence off the machine that made it
 python -m epl.live score       # ingest results, then score what has been sealed
 deploy/run_live.sh seal --push # the same, in the container the Pi's crontab fires (deploy/README.md)
+python -m epl.bot check        # what the bot would say about the schedule, sending nothing
+python -m epl.bot serve        # poll Telegram for commands: /round /live /board /health
+python -m epl.bot notify seal  # what deploy/run_live.sh calls after every fire; always exits 0
 pytest                         # add --run-network to also hit football-data.co.uk
 ```
 

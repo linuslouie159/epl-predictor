@@ -429,8 +429,67 @@ second is worth ruling out by hand:
 cd ~/epl-predictor && deploy/run_live.sh upcoming     # writes nothing; safe at any hour
 ```
 
-Reading the log is the mitigation for one silence and not the other, which is most of the argument
-for issue #20's bot.
+Reading the log is the mitigation for one silence and not the other, which is what stage 17's bot
+was built to fix — step 10.
+
+---
+
+## 10. The Telegram bot (issue #20), which is optional and skippable
+
+Everything above works without it. What it adds is the only thing that reads the loop's *silence*:
+a fire that seals nothing is a quiet exit 0 by design, and both of the surviving open risks look
+exactly like one.
+
+**a. Get a token and your user id.** Message `@BotFather` on Telegram, `/newbot`, and keep the token
+it gives you. Message `@userinfobot` and keep the numeric id it replies with.
+
+**b. Put them in `deploy/.env`**, which is gitignored — a token in a tracked file is a token to
+revoke:
+
+```bash
+cd ~/epl-predictor
+cat >> deploy/.env <<'EOF'
+EPL_TELEGRAM_TOKEN=123456789:AA-your-token-here
+EPL_TELEGRAM_ALLOWED_IDS=123456789
+EOF
+```
+
+`EPL_`-prefixed on purpose: this Pi's other tenant reads `TELEGRAM_BOT_TOKEN`, and a bot that comes
+up holding the other project's token starts, polls, and posts a football scoreboard into a trading
+chat — a failure that looks exactly like working.
+
+**c. Check what it would say, sending nothing.** No token needed for this, and it is the right first
+command precisely because proving the wiring by sending a real message is the worst way to find out
+it is wrong:
+
+```bash
+docker compose -f deploy/docker-compose.yml run --rm notify check
+```
+
+You should see the last `seal` and `score` fires and either a concern or "nothing else to report",
+then `Configured: token ...abcd, 1 allowed, 1 notified`.
+
+**d. Start the poller and say hello to it.**
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d bot
+docker compose -f deploy/docker-compose.yml logs -f bot     # ctrl-C to stop watching
+```
+
+Then send it `/help` from your phone. If nothing comes back, the log says which of the three it is:
+a token Telegram rejected, an id not on the allowlist (the console prints `refused user id=`), or a
+`CONFLICT` — another poller somewhere on the same token.
+
+**e. Nothing more to install for the push half.** `deploy/run_live.sh` already calls it after every
+fire, and it does nothing at all until step b is done.
+
+| Symptom | Cause |
+|---|---|
+| `EPL_TELEGRAM_TOKEN is not set` | step b was skipped, or `deploy/.env` is not where compose looks |
+| The bot answers nobody, console says `refused user id=N` | put that `N` in `EPL_TELEGRAM_ALLOWED_IDS` |
+| `STOPPING: another process is already polling` | a second `bot` container, or one still running on another machine |
+| `another epl.bot instance holds .../telegram_bot.lock` | the first one is still up; `docker compose ... stop bot` |
+| Every fire is announced, which is too many | it should not be. `seal` speaks only when a round was written or upstream looked stale |
 
 ---
 
@@ -438,6 +497,7 @@ for issue #20's bot.
 
 ```bash
 crontab -l | grep -v 'deploy/run_live.sh' | crontab -    # stop the schedule
+docker compose -f deploy/docker-compose.yml down bot      # stop the bot, if step 10 was done
 docker image rm epl-predictor:live                        # reclaim the space
 ```
 

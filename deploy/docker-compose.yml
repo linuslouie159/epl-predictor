@@ -1,71 +1,128 @@
-# The live loop on the Pi (issue #19). One service, run to completion and thrown away.
+# The live loop on the Pi (issue #19), and the Telegram bot beside it (issue #20).
 #
 #   docker compose -f deploy/docker-compose.yml run --rm live seal --push
 #   docker compose -f deploy/docker-compose.yml run --rm live score
 #   docker compose -f deploy/docker-compose.yml run --rm live upcoming
+#   docker compose -f deploy/docker-compose.yml run --rm notify notify seal
+#   docker compose -f deploy/docker-compose.yml up -d bot
 #
-# There is no `up`, no `restart: unless-stopped` and no scheduler inside the container. The Pi's
-# own crontab fires it (deploy/crontab), the container exits, and the exit code is the whole of
-# what the schedule learns — which is the only reason `seal` was given an exit-code contract worth
-# reading (epl.live.__main__._seal). A long-running container that had crashed would look exactly
-# like one with nothing to seal, and this loop has nothing to seal most of the week.
+# THREE SERVICES, TWO SHAPES, and the split is the point rather than tidiness.
+#
+# `live` and `notify` are **run to completion and thrown away**. There is no `up` and no restart
+# policy on either: the Pi's own crontab fires them (deploy/crontab), the container exits, and the
+# exit code is the whole of what the schedule learns — which is the only reason `seal` was given an
+# exit-code contract worth reading (epl.live.__main__._seal). A long-running container that had
+# crashed would look exactly like one with nothing to seal, and this loop has nothing to seal most
+# of the week.
+#
+# `bot` is the opposite, and is the only long-lived process this project has. It polls Telegram, so
+# it must be up to hear anything, and it must come back after a reboot — issue #20's ninth
+# criterion. `restart: unless-stopped` rather than a systemd unit, and the reason is that **the
+# image is the environment** (deploy/README.md): a unit on the host would need its own way to reach
+# conda-forge's stack with the pinned BLAS provider (ADR 0009), which is precisely what the
+# container exists to stop two package managers fighting over on one Pi. `unless-stopped` also does
+# what its name says across a reboot — it comes back, unless somebody had deliberately stopped it,
+# which is the right treatment for a bot switched off on purpose for a week.
+#
+# THE BOT NEVER SEES THE DEPLOY KEY. It cannot push and has no business pushing, so the ssh mount
+# is on `live` alone. The two one-shot services otherwise share a definition with it, because the
+# bot answers from the same checkout the loop seals into and reads the same log the loop writes —
+# which is not convenience but the whole job: a bot reporting on a second copy of either would be
+# reporting on the wrong machine's work.
 
 # Named explicitly. Compose otherwise names the project after this file's directory — "deploy" —
 # which on a Pi that runs more than one thing is a name that tells nobody anything.
 name: epl-live
 
+# Everything every container needs. An anchor rather than three copies: the uid, the bind mount and
+# the git configuration below were each got wrong once already (issue #21), and three places to get
+# them wrong again is three times the chance.
+x-environment: &environment
+  # The layout module resolves everything from here, and the bind mount lands here.
+  EPL_PROJECT_ROOT: /repo
+  TZ: Europe/London
+  # Where most things look for a home directory. Set explicitly because `user:` below may give the
+  # container a uid with no passwd entry, in which case HOME defaults to `/`.
+  HOME: /home/epl
+  # A bind-mounted repository is owned by a different uid than the image was built as, and git
+  # refuses to touch one it considers dubiously owned. Set through the environment rather than with
+  # `git config --global` at build time, because a global config lives in a HOME this container
+  # does not have once `user:` is set.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: /repo
+
+# The bot's own credentials, and nothing else's. Empty by default so a Pi that has not been given a
+# token starts the container, prints "not configured" and exits — rather than failing to start with
+# a compose error, which is a worse way to learn the same thing. The values live in deploy/.env,
+# which is gitignored; nothing here is a secret and nothing that is one belongs in this file.
+#
+# Prefixed `EPL_` because the Pi's other tenant already uses `TELEGRAM_BOT_TOKEN`. Two bots on one
+# box sharing a variable name is how this one comes up holding the other's token, and a bot that
+# starts, polls successfully and posts a football scoreboard into a trading chat has failed in a way
+# that looks like working.
+x-telegram: &telegram
+  EPL_TELEGRAM_TOKEN: ${EPL_TELEGRAM_TOKEN:-}
+  EPL_TELEGRAM_ALLOWED_IDS: ${EPL_TELEGRAM_ALLOWED_IDS:-}
+  EPL_TELEGRAM_NOTIFY_IDS: ${EPL_TELEGRAM_NOTIFY_IDS:-}
+
+x-container: &container
+  image: epl-predictor:live
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+
+  # The repository, not a copy of it. Sealed rounds are evidence and have to land in a checkout a
+  # person can inspect, and the code these containers execute has to be the code `git pull` last
+  # fetched. EPL_REPO defaults to the parent of this file's directory, which is right when compose
+  # is run from inside the clone; set it in deploy/.env when it is not.
+  volumes:
+    - ${EPL_REPO:-..}:/repo
+
+  working_dir: /repo
+
+  # Run as the user who owns the clone, so what the loop writes is not root-owned and the owner can
+  # still `git push` by hand. 1000:1000 is the first account on Raspberry Pi OS; override in
+  # deploy/.env if the clone belongs to somebody else (`id -u` and `id -g`).
+  #
+  # This uid must also own the `.ssh` directory `live` mounts. ssh refuses a private key it
+  # considers badly owned, so a PUID that does not match the key's owner fails the push with a
+  # permissions complaint rather than a mount error — which reads like the wrong problem. One user
+  # owns the clone, the key and this setting, or none of it works.
+  user: "${PUID:-1000}:${PGID:-1000}"
+
+  environment: *environment
+
+  # Football-Data, the git remote when pushing, and api.telegram.org. Nothing listens.
+  network_mode: bridge
+
 services:
   live:
-    image: epl-predictor:live
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    <<: *container
 
-    # The repository, not a copy of it. Sealed rounds are evidence and have to land in a checkout
-    # a person can inspect, and the code the loop runs has to be the code `git pull` last fetched.
-    # EPL_REPO defaults to the parent of this file's directory, which is right when compose is run
-    # from inside the clone; set it in deploy/.env when it is not.
     volumes:
       - ${EPL_REPO:-..}:/repo
-      # The deploy key, read-only. Pushing is what makes a sealed round evidence off this machine,
-      # and read-only is the whole of the container's business with it.
+      # The deploy key, read-only, and on this service only. Pushing is what makes a sealed round
+      # evidence off this machine, and read-only is the whole of the container's business with it.
       #
-      # Mounted under HOME rather than under /root, because `user:` below means the container is
-      # not root and ssh looks for keys in $HOME/.ssh. The *whole* directory goes in, not just the
-      # key, because ssh also needs `known_hosts` — and read-only works only because the Pi's owner
-      # has already accepted github.com's host key by hand (deploy/README.md, step 1). If they have
-      # not, ssh fails host key verification and the loop exits 1 saying NOT PUSHED, which is the
-      # right way for that to go wrong.
+      # Mounted under HOME rather than under /root, because `user:` above means the container is not
+      # root and ssh looks for keys in $HOME/.ssh. The *whole* directory goes in, not just the key,
+      # because ssh also needs `known_hosts` — and read-only works only because the Pi's owner has
+      # already accepted github.com's host key by hand (deploy/README.md, step 1). If they have not,
+      # ssh fails host key verification and the loop exits 1 saying NOT PUSHED, which is the right
+      # way for that to go wrong.
       - ${SSH_DIR:-~/.ssh}:/home/epl/.ssh:ro
 
-    working_dir: /repo
-
-    # Run as the user who owns the clone, so what the loop writes is not root-owned and the owner
-    # can still `git push` by hand. 1000:1000 is the first account on Raspberry Pi OS; override in
-    # deploy/.env if the clone belongs to somebody else (`id -u` and `id -g`).
-    #
-    # This uid must also own the `.ssh` directory mounted below. ssh refuses a private key it
-    # considers badly owned, so a PUID that does not match the key's owner fails the push with a
-    # permissions complaint rather than a mount error — which reads like the wrong problem. One
-    # user owns the clone, the key and this setting, or none of it works.
-    user: "${PUID:-1000}:${PGID:-1000}"
-
     environment:
-      EPL_PROJECT_ROOT: /repo
-      TZ: Europe/London
-      # Where most things look for the key and for known_hosts. Set explicitly because `user:` above
-      # may give the container a uid with no passwd entry, in which case HOME defaults to `/` —
-      # where ssh finds no keys, and the push fails for a reason that reads like a credentials
-      # problem and is not.
-      HOME: /home/epl
-      # And this is why HOME is not enough, measured at issue #21 on the first real push.
+      <<: *environment
+      # Why HOME is not enough, measured at issue #21 on the first real push.
       #
       # **OpenSSH does not resolve `~` from $HOME.** It reads the passwd database for the running
-      # uid. The comment above used to assert that uid 1000 has no passwd entry in this image; it
-      # does — `ubuntu`, homed at /home/ubuntu — so ssh looked in /home/ubuntu/.ssh, found no
-      # known_hosts, and failed with `Host key verification failed` while the correct file sat
-      # mounted and readable at /home/epl/.ssh. That error is the first row of SETUP.md step 7's
-      # table, whose stated cause is a skipped `ssh -T`, so it points at exactly the wrong thing.
+      # uid. An earlier comment asserted that uid 1000 has no passwd entry in this image; it does —
+      # `ubuntu`, homed at /home/ubuntu — so ssh looked in /home/ubuntu/.ssh, found no known_hosts,
+      # and failed with `Host key verification failed` while the correct file sat mounted and
+      # readable at /home/epl/.ssh. That error is the first row of SETUP.md step 7's table, whose
+      # stated cause is a skipped `ssh -T`, so it points at exactly the wrong thing.
       #
       # Naming both files outright is what makes this independent of the base image's passwd file,
       # which is a floating `:latest` and free to add or rename a uid-1000 user at any time.
@@ -74,17 +131,29 @@ services:
         ssh -i /home/epl/.ssh/id_ed25519
         -o UserKnownHostsFile=/home/epl/.ssh/known_hosts
         -o IdentitiesOnly=yes
-      # A bind-mounted repository is owned by a different uid than the image was built as, and git
-      # refuses to touch one it considers dubiously owned. Set through the environment rather than
-      # with `git config --global` at build time, because a global config lives in a HOME this
-      # container does not have once `user:` is set.
-      GIT_CONFIG_COUNT: "1"
-      GIT_CONFIG_KEY_0: safe.directory
-      GIT_CONFIG_VALUE_0: /repo
       # The identity the sealed commit carries comes from the clone's own .git/config — see
       # deploy/README.md. It is deliberately not set here: a commit in the store that proves when a
       # Prediction was made should say who made it, and that is the Pi's owner rather than a
       # container image.
 
-    # Football-Data and, when pushing, the git remote. Nothing listens.
-    network_mode: bridge
+  # The push half of the bot (issue #20). One shot, fired by deploy/run_live.sh after every
+  # scheduled run, and it **always exits 0** — a notify failure must never break the run that
+  # triggered it. No ssh mount: it reports on the store and cannot write to it.
+  notify:
+    <<: *container
+    entrypoint: ["python", "-m", "epl.bot"]
+    command: ["notify", "seal"]
+    environment:
+      <<: [*environment, *telegram]
+
+  # The pull half. The only long-lived process in this project — see the header for why it restarts
+  # and the loop's containers do not. `python -m epl.bot serve` refuses to start twice on one token,
+  # so a `docker compose up -d bot` on top of a running one fails loudly rather than quietly
+  # splitting the updates between two pollers.
+  bot:
+    <<: *container
+    entrypoint: ["python", "-m", "epl.bot"]
+    command: ["serve"]
+    restart: unless-stopped
+    environment:
+      <<: [*environment, *telegram]

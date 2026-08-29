@@ -1622,6 +1622,177 @@ by hand that tell you something the log does not.
 happens, is a fire that has to seal a round *from cold* on a schedule — every seal so far has been
 inside a window a person was watching.
 
+## The Telegram bot, and the silence it was built to read
+
+Stage 17, issue #20. `src/epl/bot/`, and a second and third service in `deploy/docker-compose.yml`.
+
+### The ticket asked for a different thing than it was written for
+
+Its first acceptance criterion, when it was filed, was that **nothing announces the day the answer
+changes** — the day `fixtures.csv` first carried a Premier League row. That day was 28 Aug 2026 and
+it has been and gone, noticed only because a person happened to be running the loop by hand while
+deploying it. The criterion was rewritten before this stage was built, and what replaced it is
+narrower and recurs:
+
+> A quiet exit 0 is correct for the loop and is not enough for a human: distinguishing "no Premier
+> League football this week" from "upstream served us a stale file through both fires" is the single
+> most valuable thing this bot does.
+
+That is open risk 7, and it is worth being exact about what can and cannot be known. **Nothing can
+tell an empty week from a lost round from one fetch.** The rolling file says what it says. What
+*can* be known is whether upstream regenerated the file between the two fires, and that is the same
+question in a form that has an answer: every fetch is cached under the instant it was taken
+(`epl.ingest.fixtures.raw_fixtures_path`), so two fires naming two copies whose bytes match saw a
+file upstream had not touched across the whole window. `epl.bot.watch.stale_upstream` is that
+comparison and nothing more.
+
+The ticket suggested `Last-Modified` for this. Bytes were used instead, because the fetcher does not
+record response headers and the cached copies are already on disk — the measurement that closed open
+risk 2 was itself "two fetches, byte-identical eight hours apart". Adding header capture to
+`epl.ingest` to answer a question the bytes already answer would have put a change in the ingest for
+the benefit of a chat app.
+
+### Open risk 6 is reported retrospectively, and that limit is stated rather than glossed
+
+A Pi that is off writes no `===== RUN` block. It also runs no bot. So **this is not a dead man's
+switch and cannot be one on a single machine**: a process that is not running cannot report that it
+is not running, and closing that gap needs a second host — which is the same argument
+docs/DECISIONS.md already weighed and lost when it chose a Pi over GitHub Actions.
+
+What is buildable is a bot that, when it comes back, says which anchor days went by unfired.
+`epl.bot.watch.absent` does that, bounded at both ends: measured from the first fire in the log, so
+a fresh clone is not reported as an outage, and limited to the last fortnight, so a bot restarted
+after a month away reports the part its reader can still act on.
+
+The days it expects are **Tuesdays and Fridays from `epl.rounds`**, not from `deploy/crontab`. The
+schedule fires on those days *because* a Prediction Round anchors to one, and reading cron would
+make the check agree with the schedule rather than with the thing the schedule was derived from — a
+hand-edited crontab being exactly the case where those differ and somebody should hear about it.
+
+### Which half says what, and why the split is not arbitrary
+
+The push half (`epl.bot.notify`, fired by `deploy/run_live.sh`) speaks about the fire that just
+happened: a round sealed, a round scored, a loud failure, and a stale upstream file. The pull half
+(`epl.bot.serve`, long-lived) speaks about the fires that *did not* happen, and dedupes.
+
+That is not tidiness. A notifier is started by a fire, so "there was no fire" is not something it
+can observe; and open risk 6's finding covers a fortnight, so a notifier reporting it would repeat
+the same gap three times a day until it scrolled out of the lookback. Nobody reads that channel by
+November, which is the failure issue #19's exit-code contract was written against, arriving by
+another route.
+
+**Most fires say nothing, and the tests are mostly about that.** Two of the three crontab lines are
+`seal --push` and the second is a retry designed to find the round already sealed.
+
+### It decides from artefacts, not from the loop's prose
+
+A `seal` that sealed leaves a file under `outputs/live/` newer than the fire; a `score` that scored
+leaves `outputs/live_scoreboard.csv` newer than the fire. Both are facts on disk. The alternative —
+matching on "sealed 40 Predictions from 4 Predictors" — would make a reworded log line silence the
+bot, which is the one failure a notifier must not have.
+
+Three lines of the loop's output *are* read, and all three are now named constants in
+`epl.live.upcoming`: `NO_FIXTURE_TO_PREDICT`, `NONE_INSIDE_A_WINDOW` and `ROLLING_FILE_PREFIX`. The
+first two are the whole of what distinguishes the two silences, and they are constants so that
+rewording a message cannot quietly blind the only thing watching for the risk. `ROLLING_FILE_PREFIX`
+moved out of `epl.live.__main__` and into `upcoming` at the same time: a library module importing a
+`__main__` is the wrong direction, and it dragged the ingest's fetchers into the bot's process.
+
+### Read-only, checked by walking the source rather than by promising
+
+Issue #20's eighth criterion is that the bot cannot seal, supersede, backfill or score. A chat app
+must not be a second door into `outputs/live/` (ADR 0005): a Sealed Prediction is evidence because
+the loop wrote it before kickoff under a moment nobody could choose, and a message from a phone is
+the shortest route in the system to a row with none of those properties.
+
+`tests/bot/test_the_bot_is_read_only.py` checks it the way `tests/v2` checks its own claim, and is
+**precise about what that proves**. Nothing makes a Python process incapable of calling a function
+in a module something else already imported, and plenty is already imported — `epl.bot.answers`
+reads the sealed store through `epl.ledger.live`, which is where `seal` and `supersede` live. What
+is checked is that **no file under `src/epl/bot/` names a writing door**, by import *or* by call.
+The call sweep matters and the import sweep alone would miss the realistic mistake: `from
+epl.ledger import live as store` is a correct import, and `store.seal(rows)` beneath it would be a
+write with nothing forbidden in the file's imports at all.
+
+### The numbers it may not say, made structural where possible
+
+Issue #20 carries a list headed "Things the bot must not say", and insists these are not style
+notes. They are enforced in `epl.bot.answers`, which is the one place a measurement becomes a
+sentence:
+
+- **No calibrated Live Season figure.** `live_board` selects `PRE_CALIBRATION_COLUMNS` — the same
+  two lines `epl.live.__main__._score` uses, rather than a second policy that could drift from it.
+- **No RPS from a handful of Fixtures as a track record.** The sample size is in the same message,
+  always, beside the Evaluation Window's 21 closed Seasons.
+- **Never the sequential diagnostic.** Nothing in the package imports it, which the sweep above
+  enforces; the word-absence check in `test_answers.py` is the weaker half.
+- **Never accuracy as the headline.** Boards render in `epl.ledger.scoreboard.METRICS` order, from
+  that tuple rather than a second list, so RPS is first because the project says it is.
+- **Never a Predictor without its `note`.** Read off the registry by name for every row of every
+  board, so the Ceiling Line's caveat and a Pundit's travel with them, and a Predictor registered
+  tomorrow is covered with no change here. No branch per Predictor, the same as the scoreboard.
+
+### The Evaluation Window's board is refused rather than recited, and that is the answer
+
+`outputs/scoreboard.csv` is derived and regenerable, so it is gitignored (ADR 0005's reasoning), and
+rebuilding it needs `outputs/backtest/`, which is written by the one command `deploy/crontab` must
+never schedule. **So the Pi has no Evaluation Window board**, and `/board` says so and names the two
+commands rather than printing the README's numbers. A bot reciting them would be reporting a
+measurement it does not hold, on a machine where it may since have changed. When the file *is*
+there, its modification time goes in the message: a derived file carries no date, and this one is
+regenerated by hand.
+
+### No Telegram library, and no event loop
+
+The Bot API surface used is four methods over HTTPS — `getMe`, `setMyCommands`, `getUpdates`,
+`sendMessage` — and `requests` is already in `environment.yml`. An async framework would put an
+event loop inside a package whose every other module is synchronous, and would add a dependency to a
+conda solve where two free version choices already break the build outright (ADR 0009's BLAS pin,
+and `arviz <1`). `epl.bot.api` is the cost; the gain is that every answer in the package is a plain
+function returning a string, testable with no network, no token and no event loop.
+
+Sending fails soft and polling does not, and the asymmetry is deliberate. A notify failure must
+never break the run that triggered it, so `send` swallows everything and returns a bool. Polling is
+the bot's own main loop, and one of its failures — `Conflict` — must stop it dead: **two pollers on
+one token do not conflict visibly.** Telegram hands each update to whoever asked first, so a
+forgotten instance steals half the replies and the half that arrives makes the bot look like it is
+working. There are two guards because they catch different things: an OS lock catches a second
+process on this machine before it polls at all, and the 409 catches one on a machine no lock can
+see.
+
+### A compose service rather than a systemd unit, and no deploy key
+
+Issue #20 asks for the reason to be recorded either way. **The image is the environment.** A systemd
+unit on the host would need its own route to conda-forge's stack with the pinned BLAS provider,
+which is the precise thing the container exists to stop two package managers fighting over on a Pi
+that already runs a venv-based tenant. `restart: unless-stopped` also does what its name says across
+a reboot, and leaves a bot switched off on purpose switched off.
+
+The bot does **not** mount the deploy key. The ssh mount is on the `live` service alone: the bot
+cannot push, and it is the only long-lived process here and the only one taking input from outside
+the machine.
+
+### What is not built, and is not an oversight
+
+- **No live Season Projection command.** It cannot be built at all (see open risk 7's entry), and a
+  `/projection` that answered from a stale file would be worse than its absence.
+- **No Pundit column on the live board.** Empty by design, filling in retrospectively (issue #16);
+  the absence is explained in words where it would appear, because a blank cell reads as a bug.
+- **No state file.** The push half needs none — every decision it makes is a comparison against a
+  file's modification time — and the pull half's deduplication is in memory, lost on a restart. That
+  is the right way round: a restart is when open risk 6 is most likely to be true, since the
+  commonest reason this process stopped is the machine having stopped.
+
+### What is untested until it runs on the Pi
+
+The same gap stage 16 left, one layer up. Every message, every silence and every refusal here is
+tested against a fake transport; **no message has been sent to Telegram from this repository**, and
+the things that can only fail on the real thing are the ones deployment always breaks: a token
+pasted with a trailing newline, an allowlist read from a `deploy/.env` compose does not load, a
+container that cannot resolve `api.telegram.org` on the Pi's bridge network. `python -m epl.bot
+check` exists for exactly that, and sends nothing — proving the wiring by sending a real message is
+the worst available way to discover it is wrong.
+
 ## Open risks
 
 1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.
@@ -1629,5 +1800,5 @@ inside a window a person was watching.
 3. ~~**MyFootballFacts parseability is unverified.** Content correctness was confirmed — a 2025/26 result cross-checked exactly against Football-Data — but the HTML has not been parsed across all nine season pages.~~ **Closed at stage 7.** All nine parse, yielding **3,408 calls** of a possible 3,420, and the cross-check went far past the one row the ticket asked for: the page prints the real score beside every call, and **3,402 of the 3,406 that carry one match Football-Data**, with the four exceptions named above. The HTML is hand-maintained and reads like it — annotated names, six misspellings, two Scorelines dropped inside a Club's name, and which table holds the predictions moving between pages — so the parser recognises a call by its shape rather than by where it sits, and refuses a page that yields fewer than 360 or more than 420. `tests/pundits/test_over_the_corpus.py` re-derives all of it.
 4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.
-6. **A round whose sealing window passes while the Pi is off is lost, and cannot be recovered.** This is the price of choosing a machine at home over GitHub Actions at stage 15, and it was chosen knowingly — see "The schedule, and where it runs". `supersede` refuses a round after its first kickoff on purpose, so there is no catching up afterwards. **Its trigger has now fired.** This risk said to revisit it "the moment `fixtures.csv` starts carrying Premier League rows", and that moment was 28 Aug 2026: the Pi's uptime is now load-bearing for the one store in this project that cannot be regenerated. Measured on the day it was deployed, and the reason it is being *kept* rather than escalated: the Pi had been up **32 days continuously**, `vcgencmd get_throttled` reported `0x0` — no undervoltage or thermal event since boot — it runs from NVMe rather than an SD card, and it already carries a second production tenant whose owner would notice an outage independently. The loop also fires twice per window, so only an outage spanning both loses a round. That is judged sufficient for now and it is a judgement, not a proof: a single home machine has no redundancy, and one long outage over a Friday is all it takes. The mitigation short of moving is to watch `deploy/logs/live_loop.log` for a week with no `===== RUN` block in it, which is what an off Pi looks like from here — and that is precisely what issue #20's bot is for, which is why #20 matters more now than it did when nothing sealed.
-7. **The rolling fixtures file is reliable in shape but not in time, and a round is lost if every fetch inside its window lands on a stale copy.** This is what open risk 2 became when it closed. Upstream regenerates `fixtures.csv` irregularly: three fetches across 21–27 Aug 2026 found a file that had not been rewritten in two and a half days *across a matchday*, and the fourth, on 28 Aug, found one written three hours earlier carrying the whole round. Nothing distinguishes the two cases except when the fetch happened to land. The schedule is the mitigation — two fires per window, at 16:00 and 18:30 UK, so a single stale sample does not lose the round — and it is a mitigation rather than a fix, because both fires read the same upstream file and a copy stale for a whole afternoon defeats both. **Do not confuse this with open risk 6.** That one is about this machine being off; this one happens with the Pi up, the loop green and the log reporting exit 0, because "no Premier League row in the file" is a quiet success by design and is indistinguishable from a genuinely empty week. What would close it is a source with a stated refresh guarantee, which is one of the two surviving arguments in `epl.v2.api_football.WHAT_WOULD_REVIVE_IT`. The other, and the stronger of the pair, is the live Season Projection: this risk costs a round when it bites, and that one cannot be built at all from a file three days wide.
+6. **A round whose sealing window passes while the Pi is off is lost, and cannot be recovered.** This is the price of choosing a machine at home over GitHub Actions at stage 15, and it was chosen knowingly — see "The schedule, and where it runs". `supersede` refuses a round after its first kickoff on purpose, so there is no catching up afterwards. **Its trigger has now fired.** This risk said to revisit it "the moment `fixtures.csv` starts carrying Premier League rows", and that moment was 28 Aug 2026: the Pi's uptime is now load-bearing for the one store in this project that cannot be regenerated. Measured on the day it was deployed, and the reason it is being *kept* rather than escalated: the Pi had been up **32 days continuously**, `vcgencmd get_throttled` reported `0x0` — no undervoltage or thermal event since boot — it runs from NVMe rather than an SD card, and it already carries a second production tenant whose owner would notice an outage independently. The loop also fires twice per window, so only an outage spanning both loses a round. That is judged sufficient for now and it is a judgement, not a proof: a single home machine has no redundancy, and one long outage over a Friday is all it takes. The mitigation short of moving is to watch `deploy/logs/live_loop.log` for a week with no `===== RUN` block in it, which is what an off Pi looks like from here. **Stage 17 automated that half and did not close the risk.** `epl.bot.watch.absent` reports the anchor days that went by unfired, and it is explicitly *not* a dead man's switch: the bot runs on the Pi, so an outage still in progress is reported by nobody. It speaks when the machine comes back. Closing this needs a second host, which is the argument this risk lost in the first place.
+7. **The rolling fixtures file is reliable in shape but not in time, and a round is lost if every fetch inside its window lands on a stale copy.** This is what open risk 2 became when it closed. Upstream regenerates `fixtures.csv` irregularly: three fetches across 21–27 Aug 2026 found a file that had not been rewritten in two and a half days *across a matchday*, and the fourth, on 28 Aug, found one written three hours earlier carrying the whole round. Nothing distinguishes the two cases except when the fetch happened to land. The schedule is the mitigation — two fires per window, at 16:00 and 18:30 UK, so a single stale sample does not lose the round — and it is a mitigation rather than a fix, because both fires read the same upstream file and a copy stale for a whole afternoon defeats both. **Do not confuse this with open risk 6.** That one is about this machine being off; this one happens with the Pi up, the loop green and the log reporting exit 0, because "no Premier League row in the file" is a quiet success by design and is indistinguishable from a genuinely empty week. **Stage 17 made it visible without closing it.** `epl.bot.watch.stale_upstream` reports when both of a round's fires read cached copies with identical bytes, which means upstream did not regenerate across the window — the honest claim being that nobody can then tell an empty week from a lost round, rather than that a round was lost. Knowing costs nothing and changes nothing: `supersede` still refuses a round after kickoff. What would close it is a source with a stated refresh guarantee, which is one of the two surviving arguments in `epl.v2.api_football.WHAT_WOULD_REVIVE_IT`. The other, and the stronger of the pair, is the live Season Projection: this risk costs a round when it bites, and that one cannot be built at all from a file three days wide.

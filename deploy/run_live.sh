@@ -65,6 +65,25 @@ run_exit=$?
 stamp_end="$(date '+%Y-%m-%d %H:%M:%S %z')"
 printf '===== END  %s  (exit %d) =====\n' "$stamp_end" "$run_exit" >> "$log"
 
+# The Telegram notifier (issue #20), and three things about where this line sits.
+#
+# AFTER the END line, because the notifier reads this log to find out what just happened and the
+# exit code is on that line. Its own output lands outside any `===== RUN` block and is ignored on
+# the next read, which is what the parser drops the stand-down and flock lines for.
+#
+# NOT allowed to change what cron learns. `run_exit` was captured above and is what this script
+# exits with; the `|| true` is there so that a notifier which cannot start — no token yet, no
+# network, an image without the bot in it — leaves the loop's own exit code alone. Monitoring that
+# can take down the thing it monitors is worse than none, which is also why `python -m epl.bot
+# notify` exits 0 whatever happens inside it. Two guards, because this one is a shell script that
+# somebody will one day edit without reading the Python.
+#
+# SILENT most of the time, and that is correct. Two of the three crontab lines are `seal --push`
+# and the second is a retry designed to find the round already sealed; a bot that announced every
+# fire is a bot nobody reads by November.
+docker compose -f "$script_dir/docker-compose.yml" run --rm notify notify "$subcommand" \
+    >> "$log" 2>&1 || true
+
 # Cron mails a job that exits non-zero and says nothing about one that does not, which is exactly
 # the split the loop's own exit codes were written to (issue #19, criteria 4 and 5): a week with
 # nothing to seal is silent, and a round that was sealed but could not be pushed is not.
