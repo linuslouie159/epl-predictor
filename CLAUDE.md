@@ -427,15 +427,21 @@ Four things about stage 15 worth knowing:
   0005's exact failure — and move the Evaluation Window's numbers on a timer.
 
 **Stage 16 is built**: the deployment itself (issue #21) — the image built on the Pi, the schedule
-installed in its crontab, and the first Sealed Prediction Round written. Its deliverable was evidence
-rather than code; see "Bringing it up on the Pi" in docs/DECISIONS.md.
+installed in its crontab and observed firing unattended, and the first Sealed Prediction Round
+written and pushed. Its deliverable was evidence rather than code; see "Bringing it up on the Pi" in
+docs/DECISIONS.md.
 
-Seven things about stage 16 worth knowing:
+Eight things about stage 16 worth knowing:
 
 - **The project has a live track record now, of one round.** `outputs/live/2026-08-28.csv`, 40
   Predictions over 10 Fixtures from `market_line`, `naive_baseline`, `dixon_coles` and `elo`, as-of
   `2026-08-28T00:00:00`, committed. The other five Predictors were silent, exactly as stage 12 said
   they would be. Never rewrite it — supersede or nothing.
+- **The schedule has fired on its own, once.** 13:30:01 Pi-local on 28 Aug 2026, which is 18:30 UK:
+  `seal --push` found the round already sealed, wrote nothing, added no commit and pushed anyway,
+  exit 0 in seven seconds. That one block confirms the converted cron times, the deploy key working
+  from cron's environment rather than a shell, and the retry doing its designed job. What is still
+  unproven is a fire that has to seal a round from cold with nobody watching.
 - **`fixtures.csv` carried 10 Premier League rows on the fourth fetch**, and open risk 2 closed in
   the affirmative. The three earlier fetches were not measuring a two-day horizon; they were landing
   on a file upstream had not regenerated. That distinction is open risk 7.
@@ -744,7 +750,7 @@ Two things about stage 2 worth knowing before building on it:
 
 **Every ticket through #21 is built, and #20 is the next one to do.** The modelling stages are done,
 the live loop is built and deployed, the deferred features are written down, and the schedule is
-installed on a Raspberry Pi with all three of its commands proven.
+installed on a Raspberry Pi, has fired unattended, and has pushed.
 
 **The situation changed on 28 Aug 2026 and most of what used to be written here is out of date.**
 `fixtures.csv` carried Premier League rows for the first time, the round was sealed, and the project

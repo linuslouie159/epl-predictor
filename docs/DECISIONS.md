@@ -1589,15 +1589,38 @@ reason it exists. Dixon-Coles gave Manchester City 0.587 away at Crystal Palace 
 Line's 0.576; the two disagree by more on Bournemouth v Everton, 0.452 against 0.456 with Elo at
 0.560. Nothing about the numbers needed defending, which is the only reason it was allowed to write.
 
-### What has not been observed yet
+### The schedule fired, unattended, and pushed
 
-**A real scheduled fire.** Every command in `deploy/crontab` has been run by hand on the Pi and all
-three exit 0 — `upcoming`, `seal` and `score` — and the crontab is installed with its times converted
-into the Pi's zone. What has not happened at the time of writing is cron firing one of them
-unattended. That is #21's fifth acceptance criterion and it is the one thing here still outstanding;
-the next slot is 13:30 in the Pi's zone, 18:30 UK, on a Tuesday or Friday. Until a `===== RUN` block
-appears in `deploy/logs/live_loop.log` that nobody typed, the schedule is installed rather than
-proven.
+The last thing #21 asked for was a *real* scheduled fire rather than a hand-run command. It came at
+**13:30:01 in the Pi's zone on 28 Aug 2026 — 18:30 UK**, the converted retry slot, with nobody at a
+terminal:
+
+```
+===== RUN 2026-08-28 13:30:01 -0400  (seal --push) =====
+rolling file: fixtures_20260828T173004Z.csv
+2026-08-28: 10 Fixtures, as-of 2026-08-28T00:00:00, first kickoff 2026-08-28T20:00:00
+2026-08-28 is already sealed — nothing to do
+  a genuine correction goes in with --supersede (ADR 0005)
+pushed to origin/main
+===== END  2026-08-28 13:30:08 -0400  (exit 0) =====
+```
+
+Seven seconds, and it settles more than the criterion asked. **The converted times are right**: an
+entry written `30 13` fired at 18:30 UK, which is what the `CRON_TZ` fallback was for and the only
+way to confirm the arithmetic. **The deploy key works unattended**, through `GIT_SSH_COMMAND` and a
+read-only mount, from cron's environment rather than an interactive shell — the push proof at step 7
+was a `--dry-run` by a human, and this was not. And **the retry did precisely what it is scheduled
+for**: it found the round already sealed, wrote nothing, added no commit, and pushed anyway, because
+pushing is the whole of what is left for a second fire (`deploy/crontab`, "WHY TWICE").
+
+It also took a fifth fetch of `fixtures.csv` on its own, three hours after the fourth, and that one
+still held the round. Fetches the schedule takes are not appended to
+`epl.v2.api_football.FETCHES_MEASURED` — the log is their record, and the tuple is for fetches taken
+by hand that tell you something the log does not.
+
+**All eight of #21's acceptance criteria are now met.** What is not proven, and cannot be until it
+happens, is a fire that has to seal a round *from cold* on a schedule — every seal so far has been
+inside a window a person was watching.
 
 ## Open risks
 

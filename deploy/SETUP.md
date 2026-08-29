@@ -400,6 +400,22 @@ tail -n 40 ~/epl-predictor/deploy/logs/live_loop.log
 You want a `===== RUN` block with `(exit 0)`. Cron mails you only when a job exits non-zero, which is
 the whole design: a week with nothing to seal is silent, and a round that could not be pushed is not.
 
+This is the first one that ever fired on this Pi, at the converted 18:30 UK slot, seven seconds end
+to end — a retry finding the round its predecessor had already sealed:
+
+```
+===== RUN 2026-08-28 13:30:01 -0400  (seal --push) =====
+rolling file: fixtures_20260828T173004Z.csv
+2026-08-28: 10 Fixtures, as-of 2026-08-28T00:00:00, first kickoff 2026-08-28T20:00:00
+2026-08-28 is already sealed — nothing to do
+  a genuine correction goes in with --supersede (ADR 0005)
+pushed to origin/main
+===== END  2026-08-28 13:30:08 -0400  (exit 0) =====
+```
+
+`pushed to origin/main` on a run that wrote nothing is the point of the second fire, not a
+redundancy — see `deploy/crontab`, "WHY TWICE".
+
 **A log with no new `===== RUN` block for a week is what an off Pi looks like from here**, and it is
 the mitigation for open risk 6 — a round whose window passes while the Pi is off is lost and cannot
 be sealed later.
