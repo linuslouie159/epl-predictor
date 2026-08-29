@@ -252,3 +252,25 @@ class TestTheStartUpLine:
         """A start-up line is the first thing anybody pastes into a chat when asking for help."""
         assert "123:abc" not in settings.redacted()
         assert settings.redacted().endswith("notified")
+
+
+class TestTheFirstThingAnybodySends:
+    """`/start` is the button Telegram shows on an unopened conversation.
+
+    It is therefore the first message this bot will ever receive from anyone, and it was answered
+    with "No such command" on the first real deployment — a poor account of a bot that works. Not a
+    menu entry, because Telegram offers `/start` itself and `COMMANDS` is also the menu.
+    """
+
+    def test_start_answers_as_help(self, project_root: Path) -> None:
+        now = pd.Timestamp.now(tz="UTC")
+
+        assert serve.dispatch("/start", now=now) == serve.dispatch("/help", now=now)
+
+    def test_it_is_not_offered_twice_in_the_menu(self) -> None:
+        assert "start" not in {command.name for command in serve.COMMANDS}
+
+    def test_every_alias_points_at_a_real_command(self) -> None:
+        """An alias for a command that no longer exists would answer "No such command" again."""
+        names = {command.name for command in serve.COMMANDS}
+        assert set(serve.ALIASES.values()) <= names

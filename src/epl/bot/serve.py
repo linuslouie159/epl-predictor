@@ -109,6 +109,17 @@ COMMANDS: tuple[Command, ...] = (
 )
 
 
+#: Spellings that mean one of the commands above. Deliberately not entries in :data:`COMMANDS`,
+#: because that tuple is also the "/" menu and Telegram already offers `/start` itself — listing it
+#: twice is clutter in the one place a reader is looking for what the bot can do.
+#:
+#: `/start` is there because it is the *first* thing anybody sends a bot: the button Telegram shows
+#: on an unopened conversation sends exactly that, and a first reply of "No such command" is a poor
+#: account of a bot that in fact works. Measured on the first real deployment (issue #20), where
+#: pressing Start was also the step that let the push half deliver at all.
+ALIASES: dict[str, str] = {"start": "help"}
+
+
 def dispatch(text: str, *, now: pd.Timestamp) -> str | None:
     """The answer to one message, or ``None`` when it was not a command at all.
 
@@ -122,6 +133,7 @@ def dispatch(text: str, *, now: pd.Timestamp) -> str | None:
     # Telegram addresses a command to one bot in a group as `/help@epl_predictor_bot`. A bot that
     # matched only the bare form would look broken in the one place several people can see it.
     name = head.split("@", 1)[0].strip().lower()
+    name = ALIASES.get(name, name)
     for command in COMMANDS:
         if command.name == name:
             return command.answer(argument.strip(), now)
@@ -302,6 +314,7 @@ def main(settings: Settings | None = None) -> int:
 
 
 __all__ = [
+    "ALIASES",
     "BACKOFF_SECONDS",
     "CHECK_SECONDS",
     "COMMANDS",
