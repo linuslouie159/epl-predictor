@@ -476,9 +476,19 @@ docker compose -f deploy/docker-compose.yml up -d bot
 docker compose -f deploy/docker-compose.yml logs -f bot     # ctrl-C to stop watching
 ```
 
-Then send it `/help` from your phone. If nothing comes back, the log says which of the three it is:
-a token Telegram rejected, an id not on the allowlist (the console prints `refused user id=`), or a
-`CONFLICT` — another poller somewhere on the same token.
+**e. Press Start in Telegram, and do not skip this either.** Find the bot by the username BotFather
+gave you and press **Start** (or send it anything).
+
+**A bot cannot open a conversation.** Telegram only allows it to reply into a chat a person has
+already started, so until you have messaged it once, every push is refused with `Bad Request: chat
+not found` — measured on the first real deployment, on 29 Aug 2026. The failure is soft and correct
+(`notified 0 chat(s)`, exit 0, the loop unaffected), which is exactly what makes it easy to miss:
+the schedule would go on firing, the notifier would go on reporting success, and no message would
+ever arrive. If the push half is silent for a week, this is the first thing to check.
+
+Then send it `/help`. If nothing comes back, the log says which of the four it is: a token Telegram
+rejected, a chat you have never started (above), an id not on the allowlist (the console prints
+`refused user id=`), or a `CONFLICT` — another poller somewhere on the same token.
 
 **e. Nothing more to install for the push half.** `deploy/run_live.sh` already calls it after every
 fire, and it does nothing at all until step b is done.
@@ -486,6 +496,8 @@ fire, and it does nothing at all until step b is done.
 | Symptom | Cause |
 |---|---|
 | `EPL_TELEGRAM_TOKEN is not set` | step b was skipped, or `deploy/.env` is not where compose looks |
+| `notified 0 chat(s)`, `Bad Request: chat not found` | step e was skipped — press Start in Telegram; a bot cannot open a conversation |
+| The bot is `Up` and `docker compose logs bot` is empty | the image predates `PYTHONUNBUFFERED`; `git pull` and recreate the service |
 | The bot answers nobody, console says `refused user id=N` | put that `N` in `EPL_TELEGRAM_ALLOWED_IDS` |
 | `STOPPING: another process is already polling` | a second `bot` container, or one still running on another machine |
 | `another epl.bot instance holds .../telegram_bot.lock` | the first one is still up; `docker compose ... stop bot` |
