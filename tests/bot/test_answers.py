@@ -503,3 +503,105 @@ class TestWhatIsWorthBacking:
         The structural half of this claim is in `test_the_bot_is_read_only.py`; this is the half
         that checks the cache lookup copes with there being no cache."""
         assert answers._offered_odds() == {}
+
+
+class TestTheSpreadBetweenThePredictors:
+    """Every Predictor's own numbers, the models pooled, and how far apart they are.
+
+    The pooled line is the one that can mislead, and it does so by including the wrong Predictors.
+    The Naive Baseline quotes the same three numbers about every Fixture in the Season, so averaging
+    it in does not add an opinion — it drags the pool toward the base rate and makes the models look
+    more agreed than they are. The Market Line is the benchmark, so averaging it in would leave
+    nothing to compare the models against. Both exclusions are pinned here.
+    """
+
+    def test_the_card_shows_what_every_predictor_said(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        text = answers.next_match(pd.Timestamp("2026-08-28 12:00"))
+
+        for predictor in ("dixon_coles", "elo", "market_line", "naive_baseline"):
+            assert predictor in text
+
+    def test_it_shows_the_pooled_models_and_their_spread(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        text = answers.next_match(pd.Timestamp("2026-08-28 12:00"))
+
+        assert "models" in text
+        assert "spread" in text
+
+    def test_the_baseline_is_shown_but_never_pooled(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """The load-bearing one. The baseline says 46/26/28 about everything; pooling it would move
+        every average toward the base rate and shrink every spread, which is the pooled number
+        quietly becoming a different and much less useful measurement."""
+        quotes = answers._spoke_for(answers._fixtures(sealed_store).iloc[0])
+        models = answers._models_among(quotes)
+
+        assert answers.BASELINE in set(quotes["predictor"])
+        assert answers.BASELINE not in set(models["predictor"])
+
+    def test_the_market_is_shown_but_never_pooled(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """It is the benchmark the models are measured against, not one of them."""
+        quotes = answers._spoke_for(answers._fixtures(sealed_store).iloc[0])
+        models = answers._models_among(quotes)
+
+        assert answers.MARKET in set(quotes["predictor"])
+        assert answers.MARKET not in set(models["predictor"])
+
+    def test_the_average_is_the_models_and_nothing_else(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """dixon_coles says 18/23/59 and elo 21/25/54 in this fixture set, so the pool is their
+        mean. Including the baseline's 46/26/28 would drag the home number to about 28."""
+        quotes = answers._spoke_for(answers._fixtures(sealed_store).iloc[0])
+
+        average, spread = answers._consensus(quotes)
+
+        assert sum(average) == 100
+        assert average[0] < 25  # nowhere near the baseline's 46
+        assert spread[0] >= 0
+
+    def test_one_model_alone_is_not_reported_as_a_consensus(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """A mean of one is that one under a name implying corroboration, and a spread of one is
+        zero — which reads as perfect agreement rather than as nothing to agree about."""
+        quotes = answers._spoke_for(answers._fixtures(sealed_store).iloc[0])
+        one = quotes.loc[quotes["predictor"].ne("elo")]
+
+        assert len(answers._models_among(one)) == 1
+        assert answers._consensus(one) is None
+
+    def test_it_says_when_the_models_disagree_on_the_winner(
+        self, sealed_store: pd.DataFrame, registered_predictors: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The sentence a reader wants out of the table: is this the pool, or one fit on its own?"""
+        split = sealed_store.copy()
+        elo = split["predictor"].eq("elo")
+        split.loc[elo, ["prob_home", "prob_draw", "prob_away"]] = [0.60, 0.25, 0.15]
+        monkeypatch.setattr(answers.store, "read", lambda: split)
+
+        text = answers.next_match(pd.Timestamp("2026-08-28 12:00"))
+
+        assert "The models disagree" in text
+
+    def test_a_value_line_says_how_many_models_are_behind_it(
+        self, sealed_store: pd.DataFrame, registered_predictors: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The expected return beside it is one Predictor's opinion. "Backed by 1 of 2" and
+        "backed by 2 of 2" are the same number with very different weight behind them."""
+        monkeypatch.setattr(
+            answers, "_offered_odds", lambda: TestWhatIsWorthBacking.MISPRICED
+        )
+
+        text = answers.value(pd.Timestamp("2026-08-28 12:00"))
+
+        assert "backed by" in text
+        assert "of 2 models" in text

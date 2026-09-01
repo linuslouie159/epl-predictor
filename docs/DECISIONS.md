@@ -1956,6 +1956,37 @@ away from the board, and a test asserts the market's is the lower of the two.
 A round in which most of the card looks like value says so in the message, and says it is a reason
 to distrust the model rather than to bet more.
 
+### Showing the spread between the Predictors, and which of them may be averaged
+
+A card led with one model and the market because two columns is what a phone has room for. That is
+a layout decision and it was quietly doing a second job — implying the others agreed. So a card now
+carries every Predictor that spoke, and beneath them two derived lines: the models' mean, and how
+far apart they are on each Outcome.
+
+The spread is the useful half. A forecast the model pool agrees on is a different object from the
+same number with one fit out on its own, and nothing in a single row distinguishes them. `/bet`
+carries the same idea in one line per pick — "backed by 1 of 2 models" against "backed by 2 of 2" —
+because the expected return beside it is computed from a single Predictor and cannot say which it is.
+
+**Two Predictors are shown and never pooled, for different reasons.** The Naive Baseline quotes the
+same three numbers about every Fixture in the Season; it does not know who is playing (CONTEXT.md).
+Averaging it in would not add an opinion, it would drag every pooled number toward the base rate and
+make the models look more agreed than they are — the spread would shrink for a reason that has
+nothing to do with the models. The Market Line is not a model at all but the benchmark they are
+measured against (ADR 0001); folding it in would leave nothing to compare them with and would make
+every "the models say" sentence partly a quotation of the odds. `NOT_MODELS` is a written-down tuple
+rather than a rule over the registry, because which Predictors count as models is a judgement, and a
+judgement that changes what a pooled number means should be made deliberately rather than inherited
+from a name.
+
+**The pooled number is not a Predictor and must not become one.** It is computed when a message is
+built, from rows already in the store, and is never registered, stored or scored — the same rule the
+shared calibration layer follows for the same reason: a number nobody can point at in a ledger must
+not be able to enter one. Registering a pooled Predictor is a decision with a burn-in and a
+scoreboard behind it (ADR 0008), not a formatting change. `_consensus` returns nothing at all when
+fewer than two models spoke, because a mean of one is that one under a name implying corroboration
+and a spread of one is zero, which reads as perfect agreement rather than as nothing to agree about.
+
 ## Open risks
 
 1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.

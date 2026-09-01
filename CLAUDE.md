@@ -269,6 +269,17 @@ Do not "fix" these without reading the linked ADR first:
   under every Fixture, which is what made it unreadable. The detail moved rather than went:
   `/next` and `/club` list every other Predictor that spoke beneath the model and the market, and
   the digest names them all in a line. Do not put the table back.
+- **A match card shows every Predictor, then pools only the models, and the two lines at the bottom
+  are the point.** `models` is the mean of the Predictors that are actually models and `spread` is
+  how far apart they are on each Outcome, which together say whether a reading is the pool's or one
+  fit's — invisible from a single row, and the difference between a forecast worth acting on and one
+  worth distrusting. **The Naive Baseline and the Market Line are shown and never pooled**, for two
+  different reasons named in `epl.bot.answers.NOT_MODELS`: the baseline quotes the same three
+  numbers about every Fixture, so averaging it in drags the pool toward the base rate and shrinks
+  every spread; the Market Line is the benchmark the models are measured against, so averaging it in
+  would leave nothing to compare them with. The pooled number is a display aggregate computed when a
+  message is built — never registered, never stored, never scored, on `epl.calibration`'s rule that
+  a number nobody can point at in a ledger must not be able to enter one.
 - **`/bet` answers two questions and keeps them apart, and the caveat in it is the point.** "Which
   side wins" is the model's highest probability and is nearly always a favourite the market has
   priced as one; "what is worth backing" is the model's probability against the price on offer, and

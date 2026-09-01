@@ -76,6 +76,22 @@ TAIL_LINES = 14
 HEADLINE_MODEL = "dixon_coles"
 MARKET = "market_line"
 
+#: The floor Predictor, and the Predictors that are not models.
+#:
+#: Both names are needed because a message that pools "the models" has to be able to say which
+#: Predictors those are, and the answer is not "all of them". The Naive Baseline quotes the same
+#: three numbers about every Fixture in the Season and does not know who is playing (CONTEXT.md);
+#: the Market Line is the benchmark the models are measured against (ADR 0001). Averaging either in
+#: would produce a number that is not the models' opinion — the first by dragging every pool toward
+#: the base rate, the second by making "the models say" partly a quotation of the odds it is
+#: supposed to be compared with.
+#:
+#: A tuple rather than a rule over the registry, and deliberately so: which registered Predictors
+#: count as models is a judgement, and a judgement that changes what a pooled number *means* should
+#: be a decision somebody makes here rather than a consequence of a Predictor's name.
+BASELINE = "naive_baseline"
+NOT_MODELS: tuple[str, ...] = (MARKET, BASELINE)
+
 #: How far apart a Prediction and the Market Line must be before a message points it out.
 #:
 #: On any Outcome, in percentage points. Below this the two are agreeing within the noise either
@@ -412,6 +428,13 @@ def _value_section(
             f"  price {round(100 / price)}%"
             f"  returns {expected:+.0%}"
         )
+        # Whether the pool is behind the price or one fit is out on its own. An edge every model
+        # sees is a different thing from an edge one of them sees, and the expected return above
+        # cannot tell them apart: it is computed from a single Predictor's number.
+        backing = _backers(row, index, price)
+        if backing is not None:
+            backed, total = backing
+            lines.append(f"       backed by {backed} of {total} models")
     tail = (
         f"{len(worth_it)} Outcomes clear {VALUE_THRESHOLD:.0%}; the {DISAGREEMENTS_SHOWN} best are "
         "above. A round where most of the card looks like value is a round where the model simply "
@@ -440,6 +463,24 @@ def _best_return(
     returns = [model[index] * prices[index] - 1.0 for index in range(3)]
     best = max(range(3), key=lambda index: returns[index])
     return best, returns[best], prices[best]
+
+
+def _backers(row: pd.Series, index: int, price: float) -> tuple[int, int] | None:
+    """How many models rate this Outcome above the offered price, out of how many spoke.
+
+    The expected return beside this is one Predictor's opinion (:data:`HEADLINE_MODEL`), and a
+    reader cannot tell from it whether the rest agree. "Backed by 1 of 2" and "backed by 2 of 2"
+    are the same number with very different weight behind them, and the second is the only one
+    worth much: a price the whole pool thinks is wrong is a disagreement with the book, where a
+    price one fit thinks is wrong is more often that fit.
+
+    ``None`` when fewer than two models spoke, for :func:`_consensus`' reason.
+    """
+    models = _models_among(_spoke_for(row))
+    if len(models) < 2:
+        return None
+    backed = sum(1 for _, quote in models.iterrows() if _model(quote)[index] * price > 1.0)
+    return backed, len(models)
 
 
 def _outcome_name(row: pd.Series, index: int, *, short: bool = False) -> str:
@@ -999,42 +1040,155 @@ def _sealed_line(row: pd.Series) -> str:
 
 
 def _also_sealed(row: pd.Series) -> list[str]:
-    """What every *other* Predictor said about this Fixture.
+    """Every Predictor that spoke about this Fixture, then the models pooled and their spread.
 
-    A card shows two Predictors because two columns is what a phone has room for, and the digest
-    shows one. Neither is the whole of what was sealed: four spoke on the first real round, and Elo
-    disagreeing with Dixon-Coles by four points is a fact about the forecast rather than clutter.
-    So the rest go here, on the one message that has room for them — which is also what keeps this
-    package's promise that a message about the sealed store does not quietly narrow it.
+    A card leads with one model and the market because two columns is what a phone has room for.
+    That is a choice about layout and it should not become a claim that the others said the same
+    thing, so the whole set goes here, on the one message with room for it.
+
+    **The last two lines are the point of the block.** ``models`` is the mean of the Predictors that
+    are actually models, and ``spread`` is how far apart they are on each Outcome. Together they say
+    whether a forecast is something the model *pool* believes or something one fit has wandered off
+    with, which is the difference between a reading worth acting on and a reading worth distrusting
+    — and it is invisible from a single row.
 
     Home, draw and away in the ledger's own order, with the order named in the caption. The card
-    above sorts by probability, which is right when each row is labelled with the Club it belongs
-    to and would be unreadable here, where three numbers share a line.
+    above sorts by probability, which is right when each row carries the Club it belongs to and
+    would be unreadable here, where three numbers share a line.
     """
+    quotes = _spoke_for(row)
+    if quotes.empty:
+        return []
+
+    width = max(quotes["predictor"].str.len().max(), len("models"))
+    lines = [
+        f"{quote['predictor']:<{width}}  " + _triple(render.percentages(*_model(quote)))
+        for _, quote in quotes.iterrows()
+    ]
+    pooled = _consensus(quotes)
+    if pooled is not None:
+        average, spread = pooled
+        lines.append("")
+        lines.append(f"{'models':<{width}}  " + _triple(average))
+        lines.append(f"{'spread':<{width}}  " + _triple(spread))
+    return [
+        f"Everything sealed for this match, as home / draw / away, from "
+        f"{_count_of(len(quotes), 'Predictor')}:",
+        render.block(lines),
+        _agreement(row, quotes),
+    ]
+
+
+def _spoke_for(row: pd.Series) -> pd.DataFrame:
+    """Every sealed Prediction for this Fixture, in Predictor order."""
     every = store.read()
     if every.empty:
-        return []
-    others = every.loc[
+        return every
+    return every.loc[
         every["season"].eq(row["season"])
         & every["division"].eq(row["division"])
         & every["home_club"].eq(row["home_club"])
         & every["away_club"].eq(row["away_club"])
-        & ~every["predictor"].isin([HEADLINE_MODEL, MARKET])
     ].sort_values("predictor")
-    if others.empty:
-        return []
 
-    width = int(others["predictor"].str.len().max())
-    lines = [
-        f"{quote['predictor']:<{width}}  "
-        + " / ".join(f"{value:2d}" for value in render.percentages(*_model(quote)))
-        for _, quote in others.iterrows()
-    ]
-    return [
-        f"Also sealed for this match, as home / draw / away, by the other "
-        f"{_count_of(len(lines), 'Predictor')} that spoke:",
-        render.block(lines),
-    ]
+
+def _models_among(quotes: pd.DataFrame) -> pd.DataFrame:
+    """The Predictors in this set that are models, which is not all of them.
+
+    **The Naive Baseline must never be pooled in and the Market Line must not either**, and the two
+    exclusions are for different reasons. The baseline says the same three numbers about every
+    Fixture in the Season — it does not know who is playing (CONTEXT.md) — so averaging it in does
+    not add an opinion, it drags every pooled number toward the base rate and makes disagreement
+    look smaller than it is. The Market Line is not a model at all but the benchmark the models are
+    measured against (ADR 0001); folding it into their average would leave nothing left to compare
+    them with, and would quietly make every "the models say" sentence partly a quotation of the
+    odds themselves.
+    """
+    return quotes.loc[~quotes["predictor"].isin(list(NOT_MODELS))]
+
+
+def _consensus(quotes: pd.DataFrame) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
+    """The models' mean Prediction and how far apart they are, as whole percentages.
+
+    ``None`` when fewer than two models spoke, because a mean of one is that one under a name that
+    suggests corroboration, and a spread of one is zero — which would read as perfect agreement
+    rather than as nothing to agree about.
+
+    **This is a display aggregate and is never a Prediction.** It is computed when a message is
+    built, from rows already in the store, and is not registered, not stored and not scored — the
+    same rule the shared calibration layer follows for the same reason (`epl.calibration`): a number
+    nobody can point at in a ledger must not be able to enter one. Registering a pooled Predictor is
+    a decision with a burn-in and a scoreboard behind it, not a formatting change.
+    """
+    models = _models_among(quotes)
+    if len(models) < 2:
+        return None
+    quoted = [render.percentages(*_model(quote)) for _, quote in models.iterrows()]
+    average = render.percentages(
+        *(sum(one[index] for one in quoted) / len(quoted) for index in range(3))
+    )
+    spread = tuple(
+        max(one[index] for one in quoted) - min(one[index] for one in quoted)
+        for index in range(3)
+    )
+    return average, spread
+
+
+def _agreement(row: pd.Series, quotes: pd.DataFrame) -> str:
+    """One sentence on whether the models say the same thing, and what the market makes of it.
+
+    The sentence a reader actually wants out of the table above it: is this a pool of models that
+    agree, or one model out on its own? A forecast the models split on is worth much less than the
+    same number with all of them behind it, and nothing in a single row shows the difference.
+    """
+    models = _models_among(quotes)
+    if len(models) < 2:
+        return ""
+
+    picks = {
+        str(quote["predictor"]): max(
+            range(3), key=lambda index: render.percentages(*_model(quote))[index]
+        )
+        for _, quote in models.iterrows()
+    }
+    pooled = _consensus(quotes)
+    market = quotes.loc[quotes["predictor"].eq(MARKET)]
+    theirs = (
+        max(range(3), key=lambda index: render.percentages(*_model(market.iloc[0]))[index])
+        if not market.empty
+        else None
+    )
+    every = "Both models" if len(models) == 2 else f"All {len(models)} models"
+
+    if len(set(picks.values())) > 1:
+        split = ", ".join(
+            f"{name} makes it {_outcome_name(row, pick, short=True)}"
+            for name, pick in sorted(picks.items())
+        )
+        aside = (
+            f" The market makes it {_outcome_name(row, theirs, short=True)}."
+            if theirs is not None
+            else ""
+        )
+        return f"The models disagree: {split}.{aside}"
+
+    agreed = next(iter(picks.values()))
+    apart = pooled[1][agreed] if pooled is not None else 0
+    aside = (
+        ""
+        if theirs is None
+        else " The market agrees."
+        if theirs == agreed
+        else f" The market makes it {_outcome_name(row, theirs, short=True)} instead."
+    )
+    return (
+        f"{every} make it {_outcome_name(row, agreed, short=True)}, "
+        f"{apart} points apart on how likely.{aside}"
+    )
+
+
+def _triple(values: Sequence[int]) -> str:
+    return " / ".join(f"{value:2d}" for value in values)
 
 
 def _table_for(row: pd.Series) -> list[str]:
@@ -1295,6 +1449,7 @@ def _count_of(many: int, noun: str) -> str:
 
 
 __all__ = [
+    "BASELINE",
     "DISAGREEMENTS_SHOWN",
     "DISAGREEMENT_POINTS",
     "HEADLINE_MODEL",
@@ -1303,6 +1458,7 @@ __all__ = [
     "MARKET_RPS",
     "MODEL_RPS",
     "MOVEMENT_POINTS",
+    "NOT_MODELS",
     "TAIL_LINES",
     "VALUE_THRESHOLD",
     "disagreements",
