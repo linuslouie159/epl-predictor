@@ -48,16 +48,19 @@ WRITING_DOORS: tuple[str, ...] = (
     "epl.ledger.live.commit",
     "epl.ledger.live.push",
     "epl.ledger.schema.write_csv",
+    "epl.ledger.readings.record",
     "epl.ledger.backtest.backfill",
     "epl.ledger.backtest.sequential",
     "epl.live.seal",
     "epl.live.upcoming.next_round",
+    "epl.live.prematch.run",
 )
 
 #: Whole modules the bot has no business importing at all.
 FORBIDDEN_MODULES: tuple[str, ...] = (
     "epl.ledger.backtest",
     "epl.live.seal",
+    "epl.live.prematch",
     "epl.ingest.fetcher",
     "epl.ingest.cache",
 )
@@ -107,7 +110,20 @@ def _all_imports() -> dict[str, set[str]]:
 #: `answers` reads the store through it — and `store.seal(rows)` would then be a write with no
 #: forbidden import anywhere in the file.
 WRITING_CALLS: frozenset[str] = frozenset(
-    {"seal", "supersede", "backfill", "sequential", "write_csv", "fetch_all", "build_tables"}
+    {
+        "seal",
+        "supersede",
+        "backfill",
+        "sequential",
+        "write_csv",
+        "fetch_all",
+        "build_tables",
+        # The Pre-Match Reading store's writer. The bot *reads* that store — `notify` sends the
+        # cards a `prematch` fire wrote — so `epl.ledger.readings` is a correct import here, and
+        # `readings.record(rows)` under it would be a write with no forbidden import in the
+        # file. Named deliberately unlike anything a reader does, so this entry cannot collide.
+        "record",
+    }
 )
 
 
@@ -169,8 +185,12 @@ class TestNothingHereCanWriteAPrediction:
         from epl.bot import serve
 
         assert {command.name for command in serve.COMMANDS} == {
-            "round", "live", "board", "health", "help"
+            "next", "week", "disagree", "club", "results", "record", "board", "explain",
+            "health", "help",
         }
+        # The aliases are the same claim from the other side: they may only ever point at a
+        # command in the table above, so a verb cannot be reached by a second spelling either.
+        assert set(serve.ALIASES.values()) <= {command.name for command in serve.COMMANDS}
 
 
 class TestTheSweepWouldNoticeAViolation:
@@ -227,8 +247,8 @@ class TestTheStoreIsNotWrittenEvenByAccident:
 
         before = {path: path.read_bytes() for path in live_dir().glob("*.csv")}
 
-        answers.sealed_round()
-        answers.live_board()
+        answers.round_digest()
+        answers.live_record()
         answers.evaluation_board()
         answers.health(fires.read(), now=fires.uk_now())
 

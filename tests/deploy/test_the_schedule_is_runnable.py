@@ -1,8 +1,9 @@
 """The schedule's own executability, checked in the index rather than on disk.
 
-Issue #21. `deploy/run_live.sh` is what all three crontab lines invoke, by absolute path and with
-no interpreter in front of it. A clone that lands it without the executable bit does not fail
-loudly at install time — cron fires, the shell answers **exit 126**, and the log records a
+Issue #21. `deploy/run_live.sh` is what every crontab line invokes — three for the loop and,
+since stage 18, a fourth for `prematch` — by absolute path, with no interpreter in front of it. A
+clone that lands it without the executable bit does not fail loudly at install time: cron fires,
+the shell answers **exit 126**, and the log records a
 `===== RUN =====` block wrapped around one line of `Permission denied`. That is a schedule which
 looks installed and seals nothing, which is the failure mode this project can least afford to have
 twice a week.

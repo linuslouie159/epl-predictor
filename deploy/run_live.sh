@@ -24,8 +24,22 @@ shift || true
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(dirname "$script_dir")"
 log_dir="$script_dir/logs"
-log="$log_dir/live_loop.log"
 lock="$log_dir/live_loop.lock"
+
+# WHY prematch HAS ITS OWN LOG. `live_loop.log` is a file a person opens when something has gone
+# wrong, and it holds three fires a week. `prematch` fires around forty times on a matchday and
+# almost all of them write one line saying nothing kicks off within the hour. Mixing them would
+# bury the blocks that matter under a thousand that do not. It is the same block format and the
+# same parser either way (`epl.bot.fires.LOGS` names this file), so `/health` still sees them.
+#
+# This is the only thing in this script that varies by subcommand, and it is a filename rather
+# than a decision — every choice that could seal or read something at the wrong moment still
+# lives in the code.
+if [ "$subcommand" = "prematch" ]; then
+    log="$log_dir/prematch.log"
+else
+    log="$log_dir/live_loop.log"
+fi
 
 mkdir -p "$log_dir"
 

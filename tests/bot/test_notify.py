@@ -26,6 +26,7 @@ from log_blocks import block
 from epl.bot import api, fires, notify
 from epl.bot.settings import Settings
 from epl.ingest.fixtures import fixtures_dir
+from epl.ledger import readings
 from epl.live import upcoming
 from epl.paths import live_dir, outputs_dir
 
@@ -80,6 +81,25 @@ def earlier(path: Path) -> None:
     os.utime(path, (before, before))
 
 
+def a_prematch_fire(*body: str, exit_code: int = 0):
+    """A `prematch` fire, which is logged separately and is otherwise an ordinary fire."""
+    return fires.parse(block(JUST_NOW, "prematch --push", *body, exit_code=exit_code))
+
+
+def _a_reading_written_now(sealed: pd.DataFrame) -> None:
+    """A Pre-Match Reading for the round's first Fixture, written after the fire started.
+
+    Built from the sealed rows rather than by re-running a model: what this file is about is which
+    fires speak, and re-fitting Dixon-Coles to find that out would make the test slow and no more
+    convincing. Only the As-Of Instant differs, which is the whole difference between a Reading and
+    the Sealed Prediction it followed.
+    """
+    first = sealed.loc[sealed["home_club"].eq("crystal_palace")].copy()
+    first["as_of_instant"] = pd.Timestamp("2026-08-28 19:00:00")
+    readings.record(first, day=pd.Timestamp("2026-08-28"))
+    recently(readings.path(pd.Timestamp("2026-08-28")))
+
+
 class TestASealThatSealed:
     def test_it_announces_the_round(
         self, sealed_store: pd.DataFrame, registered_predictors: None
@@ -89,9 +109,11 @@ class TestASealThatSealed:
         message = notify.compose("seal", found=a_fire())
 
         assert message is not None
-        assert "Sealed" in message
-        assert "2026-08-28" in message
-        assert "Crystal Palace" in message
+        assert "PREDICTIONS SEALED" in message
+        assert "Friday 28 August" in message
+        # Short names in the digest: ten Fixtures of "Crystal Palace v Manchester City" is the
+        # line that wraps on a phone. The canonical name is used in a single-match heading.
+        assert "Palace" in message and "Man City" in message
 
     def test_the_message_names_every_predictor_that_spoke(
         self, sealed_store: pd.DataFrame, registered_predictors: None
@@ -195,7 +217,7 @@ class TestAScore:
         message = notify.compose("score", found=a_fire(command="score "))
 
         assert message is not None
-        assert "Scored" in message
+        assert "ROUND SCORED" in message
 
     def test_a_score_with_nothing_played_yet_says_nothing(
         self, sealed_store: pd.DataFrame, corpus: Path, registered_predictors: None
@@ -230,8 +252,10 @@ class TestItNeverBreaksTheRunThatTriggeredIt:
         self, project_root: Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        # `compose_all` rather than `compose`, because that is what `run` calls: a `prematch`
+        # fire can be worth several cards, and `compose` is the single-message view of it.
         monkeypatch.setattr(
-            notify, "compose", lambda *_, **__: (_ for _ in ()).throw(RuntimeError("boom"))
+            notify, "compose_all", lambda *_, **__: (_ for _ in ()).throw(RuntimeError("boom"))
         )
 
         assert notify.run("seal") is None
@@ -257,4 +281,63 @@ class TestItSendsWhatItComposed:
         notify.run("seal", settings=settings, telegram=bot, found=a_fire())
 
         assert recorder.sent
-        assert "2026-08-28" in "".join(recorder.sent)
+        assert "Friday 28 August" in "".join(recorder.sent)
+
+
+class TestAPrematchFire:
+    """Stage 18's card, and the silence that is almost every one of these fires.
+
+    `prematch` fires around forty times on a matchday against ten Fixtures in a round, so the
+    overwhelming majority of them have nothing to say — the same shape as a `seal` retry, arriving
+    forty times harder. What decides is the same artefact rule as everywhere else here: a Pre-Match
+    Reading written since the fire started, not a line in the log.
+    """
+
+    def test_a_fire_that_read_nothing_says_nothing(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        assert notify.compose_all("prematch", found=a_prematch_fire()) == []
+
+    def test_a_fire_that_took_a_reading_sends_one_card_per_fixture(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        _a_reading_written_now(sealed_store)
+
+        cards = notify.compose_all("prematch", found=a_prematch_fire())
+
+        assert len(cards) == 1
+        assert "KICK-OFF" in cards[0]
+        assert "Crystal Palace" in cards[0] and "Manchester City" in cards[0]
+
+    def test_the_card_says_which_forecast_is_the_record(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """A Reading is not the track record and every card has to say so, because it is the one
+        message in this project that quotes a Prediction which is deliberately never scored."""
+        _a_reading_written_now(sealed_store)
+
+        (card,) = notify.compose_all("prematch", found=a_prematch_fire())
+
+        assert "sealed" in card.lower()
+        assert "scored" in card.lower()
+
+    def test_a_reading_an_earlier_fire_wrote_is_not_announced_again(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """A day's file is appended to, so the rows an earlier fire wrote are still in it. Cutting
+        by the file's modification time is what stops a second card for a match that had one."""
+        _a_reading_written_now(sealed_store)
+        earlier(readings.path(pd.Timestamp("2026-08-28")))
+
+        assert notify.compose_all("prematch", found=a_prematch_fire()) == []
+
+    def test_a_failed_prematch_fire_is_still_reported(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """Nothing due is exit 0 and says nothing; anything else is a failure and is loud, exactly
+        as it is for the loop's own commands."""
+        found = a_prematch_fire("something broke", exit_code=1)
+
+        (message,) = notify.compose_all("prematch", found=found)
+
+        assert "something broke" in message

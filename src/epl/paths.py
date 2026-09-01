@@ -50,6 +50,19 @@ def live_dir() -> Path:
     return outputs_dir() / "live"
 
 
+def prematch_dir() -> Path:
+    """Pre-Match Readings: what the model said an hour before kickoff, after the round was sealed.
+
+    A third store, and deliberately not either of ADR 0005's two. A Reading is stamped later than
+    the round it belongs to and knows more than the sealed Prediction did — results from earlier in
+    the same round — so it can never go in `outputs/live/`, where a later stamp means a correction.
+    It is not regenerable either: the corpus it was cut from has grown since, so re-running the code
+    tomorrow gives a different number. Committed for that reason, beside the sealed store rather
+    than inside it. See docs/DECISIONS.md, "A third store".
+    """
+    return outputs_dir() / "prematch"
+
+
 def live_scoreboard_path() -> Path:
     """Where the Live Season is scored, apart from the Evaluation Window's board.
 

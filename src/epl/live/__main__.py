@@ -4,6 +4,7 @@
     python -m epl.live seal        predict the upcoming round, write it, and commit it
     python -m epl.live seal --supersede   correct a round already sealed, at a new As-Of Instant
     python -m epl.live score       ingest results, then score what has been sealed
+    python -m epl.live prematch    read the Fixtures kicking off within the hour, afresh
 
 ``upcoming`` is the one to run first and the one that answers the open question. It writes nothing,
 so it can be run at any hour; ``seal`` does the same work and then writes, and refuses outside the
@@ -12,6 +13,15 @@ round's own window.
 Both fetch the rolling file by default. ``--cached`` reads the last fetch instead, which is what to
 use when asking what *was* there rather than what is — the file is replaced in place upstream, so a
 cached copy is the only record of a given week.
+
+``prematch`` is the third half and runs far more often than the other two — every half hour on a
+matchday. Most of those fires have nothing kicking off inside the window and exit 0 immediately,
+having read one small file; a fire that *does* have something due refreshes the Live Season,
+rebuilds the match table and runs every Predictor over that one Fixture. What it writes is a
+**Pre-Match Reading** and never a Sealed Prediction (:mod:`epl.ledger.readings`): it is stamped
+an hour before kickoff rather than before the round, so it has seen results the sealed forecast
+had not, and the
+sealed forecast remains the one that is scored.
 
 ``score`` is the retrospective half and is meant for a schedule. It refreshes the Live Season from
 upstream, rebuilds the match table, re-audits the seal, and scores every Sealed
@@ -40,7 +50,7 @@ from epl.ingest import (
 )
 from epl.ledger import live as store
 from epl.ledger import scoreboard
-from epl.live import seal, upcoming
+from epl.live import prematch, seal, upcoming
 from epl.live.upcoming import ROLLING_FILE_PREFIX
 from epl.paths import live_scoreboard_path
 from epl.predictors import Corpus
@@ -104,7 +114,26 @@ def main(argv: list[str] | None = None) -> int:
         help="score what is already in the match table rather than refreshing it from upstream",
     )
 
+    reading = sub.add_parser("prematch", help="read the Fixtures kicking off within the hour")
+    reading.add_argument(
+        "--no-commit",
+        action="store_true",
+        help="write the Readings without committing them",
+    )
+    reading.add_argument(
+        "--push",
+        action="store_true",
+        help="push the commit to its remote — what an unattended loop on another machine needs",
+    )
+    reading.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="compute and print without writing anything — how to see a card on any afternoon",
+    )
+
     args = parser.parse_args(argv)
+    if args.command == "prematch" and args.dry_run and (args.push or not args.no_commit):
+        parser.error("--dry-run writes nothing, so it cannot commit or push; add --no-commit")
     # `score` rebuilds the canonical match table, so pointing it at another one and asking it to
     # ingest would refresh one table and read a different one. Refused rather than resolved: which
     # of the two the caller meant is not something to guess at.
@@ -131,6 +160,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "score":
         return _score(args.matches, ingest_first=not args.no_ingest)
+    if args.command == "prematch":
+        return _prematch(
+            args.matches,
+            commit=not args.no_commit,
+            push=args.push,
+            dry_run=args.dry_run,
+        )
     raise AssertionError(f"unhandled command {args.command!r}")  # pragma: no cover
 
 
@@ -266,6 +302,84 @@ def _push() -> int:
     if landed is None:
         print("WARNING: the round is committed here and NOT PUSHED, so it proves nothing offsite.")
         print("  check the remote and the credentials; the next fire of the loop will retry")
+        return 1
+    print(f"pushed to {landed}")
+    return 0
+
+
+def _prematch(
+    matches_path: Path | None, *, commit: bool, push: bool, dry_run: bool
+) -> int:
+    """Read whatever kicks off within the hour, and say nothing loudly when nothing does.
+
+    **Nothing due is exit 0**, and that is the same decision as `NothingToSeal` (issue #19) applied
+    to a schedule that fires forty times harder. This runs every half hour on a matchday and most of
+    those fires have no Fixture in their window; a loop that went red on them would be a loop whose
+    owner stops reading it by the second weekend, and the next thing they would not read is a real
+    failure. Everything else is still 1: a Reading written but not committed, and a Reading
+    committed but not pushed — an unproven file on a Pi looks identical to a proven one.
+
+    The cheap check comes first and is the whole reason this is affordable.
+    :func:`epl.live.prematch.due` reads the sealed store and nothing else, so a fire with nothing
+    to do costs one small file read rather than a fetch and a fit of every Predictor.
+    """
+    now = clock()
+    upcoming_soon = prematch.due(store.read(), now=now)
+    if upcoming_soon.empty:
+        print(f"{prematch.NOTHING_DUE} at {now.isoformat(timespec='seconds')}")
+        return 0
+
+    for _, row in upcoming_soon.iterrows():
+        print(
+            f"due: {row['home_club']} v {row['away_club']} at "
+            f"{pd.Timestamp(row['kickoff']).isoformat()}"
+        )
+
+    # Only now is it worth paying for the corpus. A Reading's whole value is that it has seen the
+    # results of matches played earlier in this round, and those arrive through the same refresh
+    # `score` does — so the fetch is the point rather than an overhead.
+    if not dry_run:
+        fetch_all([LIVE_SEASON], DIVISIONS, refresh=True)
+        matches, _, destination, _ = build_tables()
+        print(f"{len(matches)} matches -> {destination}")
+
+    matches = match_table(matches_path)
+    try:
+        rolling = _rolling(matches, cached=dry_run)
+    except upcoming.LiveError as refused:
+        print(refused)
+        return 1
+
+    reading = prematch.select(rolling, upcoming_soon)
+    if reading.empty:
+        # The rolling file rolls forward and upstream regenerates it irregularly (open risk 7). A
+        # due Fixture that has dropped off it is an ordinary Saturday rather than a failure, and
+        # exiting non-zero on it would be the schedule going red on something nobody can fix.
+        print(f"{prematch.NOT_IN_THE_ROLLING_FILE} at {now.isoformat(timespec='seconds')}")
+        return 0
+
+    try:
+        taken = prematch.run(reading, Corpus(matches), now=now, record=not dry_run)
+    except (prematch.PrematchError, ledger.LedgerError) as refused:
+        print(refused)
+        return 1
+
+    print(taken.describe())
+    if dry_run:
+        print(taken.rows.to_string(index=False))
+        return 0
+    if commit and taken.commit is None:
+        print("WARNING: the Readings were written but not committed, so nothing proves when.")
+        return 1
+    return _publish() if push else 0
+
+
+def _publish() -> int:
+    """Push, and complain as loudly as an uncommitted Reading if it did not land."""
+    landed = prematch.publish()
+    if landed is None:
+        print("WARNING: the Readings are committed here and NOT PUSHED.")
+        print("  check the remote and the credentials; the next fire will retry")
         return 1
     print(f"pushed to {landed}")
     return 0

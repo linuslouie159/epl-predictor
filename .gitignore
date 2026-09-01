@@ -19,6 +19,9 @@ data/processed/
 
 # Backtest predictions are regenerable from code + raw cache (ADR 0005).
 # outputs/live/ is deliberately NOT ignored — it is sealed evidence and must be committed.
+# outputs/prematch/ is NOT ignored either, and for a related but distinct reason: a Pre-Match
+# Reading cannot be regenerated at all, because the corpus it was cut from has grown since. It is
+# not scored and is not the track record; see outputs/prematch/README.md.
 outputs/backtest/
 
 # Python

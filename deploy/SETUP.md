@@ -347,7 +347,7 @@ crontab -l | grep -v cron_tz_probe | grep -v '^CRON_TZ' | crontab -
 cd ~/epl-predictor
 sed "s|__ROOT__|$PWD|g" deploy/crontab > /tmp/epl.cron
 crontab -l > /tmp/current 2>/dev/null; cat /tmp/epl.cron >> /tmp/current; crontab /tmp/current
-crontab -l | tail -6
+crontab -l | tail -8
 ```
 
 **If it did not fire, that same command installs a broken schedule**, because it copies the UK times
@@ -360,13 +360,25 @@ cd ~/epl-predictor
 # UK -> this Pi's own zone. Check each against `date`; deliberately not automated.
 sed "s|__ROOT__|$PWD|g" deploy/crontab   | grep -v '^CRON_TZ'   | sed -e 's|^  0  6 |  0  1 |' -e 's|^  0 16 |  0 11 |' -e 's|^ 30 18 | 30 13 |'   > /tmp/epl.cron
 crontab -l > /tmp/current 2>/dev/null; cat /tmp/epl.cron >> /tmp/current; crontab /tmp/current
-crontab -l | tail -6
+crontab -l | tail -8
 ```
 
 Those three substitutions are the `America/New_York` conversion the first Pi needed — 06:00/16:00/
 18:30 UK becoming 01:00/11:00/13:30 EDT. **Recompute them for any other zone** rather than copying,
 and record what you installed, because `deploy/crontab` in the repository stays zone-neutral and
 will not remind you.
+
+**The fourth line needs converting too and the `sed` above does not touch it.** `prematch` runs
+`0,30 11-22` — every half hour across the range that covers every Premier League kickoff — and an
+hour range cannot be shifted by matching on a literal the way the three fixed times can. Edit it by
+hand: on a Pi five hours behind the UK, `11-22` becomes `6-17`. Getting it wrong is the mildest
+failure in this file — the window is judged in UK time by the code whatever cron believes, so a
+wrong hour range can only mean some matches get no message, never that a Reading is taken at a
+moment it did not happen (`epl.live.prematch`).
+
+If you would rather not run it at all to begin with, drop the line: nothing else depends on it. The
+loop still seals, scores and pushes, and the bot still answers every command; what you lose is the
+message an hour before each kickoff.
 
 Either way, confirm the paths in the output are absolute and real, and that the hours are the ones
 you meant *in this Pi's zone*.

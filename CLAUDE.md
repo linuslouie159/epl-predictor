@@ -214,6 +214,61 @@ Do not "fix" these without reading the linked ADR first:
   instant *it* compares against carries an offset: `deploy/run_live.sh` stamps each block with
   `date '+... %z'` on a machine whose zone is nobody's decision. Mixing them raises rather than
   misreports, which is the only reason both are safe to have.
+- **There are three Prediction stores, not two, and the third is committed and never scored.**
+  `outputs/prematch/` holds **Pre-Match Readings** (CONTEXT.md): the models re-run about an hour
+  before one Fixture kicks off, *after* its round was sealed, from a corpus that by then holds the
+  results of matches played earlier in the same round. It is deliberately not `outputs/live/`,
+  because in that store a later As-Of Instant for the same Predictor and Fixture means a superseding
+  bug fix (ADR 0005) and the scoreboard keeps the latest instant — so Readings there would silently
+  replace the honest before-the-round forecast with a better-informed one every week, and the live
+  track record would improve for a reason nobody could see. It is not `outputs/backtest/` either: a
+  Reading cannot be regenerated, because the corpus has grown since. `epl.ledger.stored()` does not
+  know it exists, and `tests/live/test_prematch.py` proves that by scoring the Live Season with
+  Readings on disk and without. Whether a Reading actually beats the Prediction it followed is an
+  open question and its own ticket.
+- **The Pre-Match Reading store keeps the *first* row for a Fixture where the sealed store insists
+  on the last.** Not an inconsistency: in `outputs/live/` a later row is a correction somebody made
+  deliberately, and in `outputs/prematch/` a second row is the half-hourly schedule seeing the same
+  Fixture twice inside a 45-to-75-minute window. The first Reading is the one that was sent, so it
+  is the one the file keeps — and that same lookup is what makes the second fire quiet, rather than
+  a marker file somebody has to remember to keep in step.
+- **The bot sends Telegram HTML now, reversing stage 17's deliberate choice of plain text**, and it
+  is the same argument rather than a reversal of it. Plain text was chosen so a parse error on a
+  Club name with an apostrophe could not make a message vanish; HTML needs three characters escaped
+  where MarkdownV2 needs eighteen, `epl.bot.render.escape` is the single door every value goes
+  through, and `epl.bot.api.Telegram.send` retries once as plain text if Telegram refuses to parse.
+  The failure lands on the formatting instead of the delivery. Going quiet is still the thing that
+  must never happen.
+- **No line inside a fixed-width block may exceed 44 characters, and one message is exempt.**
+  `epl.bot.render.PRE_WIDTH` is a hard budget because a wrapped line inside a `<pre>` has lost the
+  alignment the block was for, and that failure is invisible on every machine this is developed on.
+  `tests/bot/test_render.py` applies it to every message the bot can send. The exemption is
+  `epl.bot.answers.failure`, which quotes the loop's own log and must not re-wrap it; it is named in
+  the test rather than left as something the sweep quietly does not cover.
+- **Club short names live in `epl.bot.render` and not in `clubs.csv`.** `epl.clubs.build`
+  regenerates that table from its own 115-entry mapping, so a `short_name` column added by hand
+  would be erased by the next `python -m epl.clubs.build` — and what to call Wolverhampton Wanderers
+  in a chat window is a fact about the chat window. They are derived by a rule (drop a droppable
+  suffix) with a collision check that reverts to the canonical name, which is why Bristol City and
+  Bristol Rovers keep their full names rather than both becoming "Bristol".
+- **`prematch` writes to its own log**, `deploy/logs/prematch.log`, and that is the only thing in
+  `deploy/run_live.sh` that varies by subcommand. It fires twenty-two times a day against the loop's
+  three a week, and almost every fire writes one line saying nothing kicks off within the hour;
+  mixing them would bury the blocks a person opens `live_loop.log` to find. Same format, same
+  parser (`epl.bot.fires.LOGS`), and `/health` reports the last fire of each.
+- **`prematch` shares the loop's flock, so a fire can stand down and skip a match.** Two containers
+  committing into one checkout is a corrupt index. A prematch fire landing inside a slow `score`
+  stands down quietly, which costs at most one of the two chances a Fixture gets at a message. That
+  is the right way round: sealing and scoring matter more than a card about one match.
+- **`/round` and `/live` still work and are not in the menu.** They are aliases for `/week` and
+  `/record`, the commands that replaced them, kept for the reason `/start` is aliased at all: they
+  are in one person's muscle memory and in this repository's own documentation, and a bot that
+  answers "No such command" to the name it used last week looks broken rather than tidied.
+- **The round digest shows one Predictor and the match cards show all of them.** Issue #20's first
+  criterion asks for what each Predictor said, and the old `/round` met it with a four-column table
+  under every Fixture, which is what made it unreadable. The detail moved rather than went:
+  `/next` and `/club` list every other Predictor that spoke beneath the model and the market, and
+  the digest names them all in a line. Do not put the table back.
 - **`src/epl/v2/` is a package nothing imports, and that is its whole specification.** Three
   deferred features written down instead of built (decision 12): prose, named constants, no
   functions and no classes. It is Python rather than Markdown so that "the pipeline does not import
@@ -236,6 +291,13 @@ Do not "fix" these without reading the linked ADR first:
 - Never give the Telegram bot a command that writes — not `/seal`, not `/score`, not a `/refresh`.
   A chat app is not a second door into `outputs/live/` (ADR 0005), and it is the one surface here
   that takes input from off the machine.
+- Never write a Pre-Match Reading into `outputs/live/`, and never let one reach a scoreboard. It is
+  stamped after its round was sealed and knows more than the sealed Prediction did, so admitting one
+  would make the live track record improve every week for a reason no reader could see. The sealed
+  Prediction is the record; the Reading is what a message quotes, and it says so.
+- Never widen `epl.live.prematch`'s window past an hour or so before kickoff. The whole value of a
+  Reading is that the earlier matches of its own round have been played; read it too early and it is
+  a slower, less honest copy of the sealed forecast.
 - Never let a notify failure change what the loop's exit code says. `deploy/run_live.sh` exits with
   the loop's code and `python -m epl.bot notify` exits 0 whatever happens inside it. Monitoring that
   can take down the thing it monitors is worse than none.
@@ -542,6 +604,55 @@ Nine things about stage 17 worth knowing:
   fake transport. `python -m epl.bot check` exists because proving the wiring by sending a real
   message is the worst available way to find out it is wrong.
 
+**Stage 18 is built**: the bot a person reads, and the message before every match
+(`src/epl/bot/render.py`, `src/epl/ledger/readings.py`, `src/epl/live/prematch.py`). Stage 17 built
+a monitor for the loop's silence; this makes it something somebody checks to find out who is going
+to win, without relaxing one of the rules about what it may say.
+
+Six things about stage 18 worth knowing:
+
+- **The pre-match number is computed fresh, and that is why it needed a third store.** A round
+  anchored to Friday is played Friday to Monday, so a run at four o'clock on Sunday has seen
+  Friday's and Saturday's results and the sealed forecast had not. That is a real gain and it is
+  exactly what makes the number unsealable: a later As-Of Instant in `outputs/live/` means a
+  superseding bug fix, and the scoreboard keeps the latest instant per Fixture. See the entry above
+  and docs/DECISIONS.md, "The pre-match message, and a third store".
+- **The expensive half is behind a cheap one, and that is what makes 22 fires a day affordable.**
+  `epl.live.__main__._prematch` asks the sealed store which Fixtures kick off in 45 to 75 minutes —
+  one small file, no network, no fit — and exits 0 having printed one line. Only a fire with
+  something due pays for a refresh of the Live Season, a rebuild of the match table and a run of
+  every Predictor.
+- **The cadence and the window are one decision and are tested together.** Firing on the hour and
+  the half hour against a 45-to-75-minute window catches every Premier League kickoff, all of which
+  fall on a quarter-hour. `tests/live/test_prematch.py` checks that rather than trusting the
+  arithmetic, because a match that silently gets no message looks exactly like a quiet schedule.
+- **Formatting is tested because it fails silently on the one device this is read on.** Every
+  message goes through `epl.bot.render`; no line inside a fixed-width block may exceed 44
+  characters, every message must be pure ASCII, and three probabilities must sum to 100. All three
+  are swept over every message the bot can send, and all three are invisible from a terminal.
+- **`python -m epl.bot answer /week` renders any command to stdout, sending nothing.** It goes
+  through the same dispatch table a Telegram user reaches, so what it prints is what the command
+  would reply — which is how the layout was iterated on without sending a hundred test messages.
+- **The market column in a Reading is fresh too.** The Fixtures come from a new fetch of the rolling
+  file rather than from the sealed rows, because a ledger row carries no odds and because a card
+  showing a fresh model against Friday's market would be the one comparison this must not make.
+
+**What is outstanding on stage 18 is deployment, exactly as it was for stage 17.** Everything is
+tested against a fake transport and no message has ever been sent to Telegram from this repository.
+What remains on the Pi is: `git pull`, install the fourth crontab line, and watch
+`deploy/logs/prematch.log` fill with `nothing kicks off within the hour` until a matchday. The first
+real proof is a fire that finds a Fixture due, writes `outputs/prematch/<date>.csv`, commits it and
+sends one card.
+
+**Two pre-existing test failures are unrelated to this work and are worth knowing about.**
+`tests/live/test_live_command_line.py::TestScore::test_a_sealed_round_whose_fixtures_are_unplayed_scores_nothing_yet`
+and `::test_results_arriving_turn_a_sealed_round_into_a_scored_one` fail on any machine whose clock
+is past 2026-08-29 15:00 UK, and fail identically at HEAD with none of stage 18's changes applied.
+The cause is that the fixtures seal a round dated 2026-08-28 under a stopped clock and then commit
+it with real `git`, so `epl.ledger.live.seal_violations` correctly reports a sealed file committed
+after its own round's first kickoff and `score` exits 1. It is a fixture that was written to pass in
+a particular week, not a defect in the store.
+
 **Stage 14 is built**: the deferred-v2 stubs (`src/epl/v2/`, issue #18) — the XGBoost/ML layer, the
 Golden Boot player model and the API-Football client, written down instead of built (decision 12).
 Prose and named constants, no functions and no classes, imported by nothing. Deleting the directory
@@ -824,7 +935,8 @@ Two things about stage 2 worth knowing before building on it:
 
 **Every filed ticket is built.** The modelling stages are done, the live loop is built and deployed,
 the deferred features are written down, the schedule is installed on a Raspberry Pi and has fired
-unattended and pushed, and the bot that reads its silence is written.
+unattended and pushed, and the bot that reads its silence is written — and, at stage 18, rewritten
+into something a person reads, with a message before every match.
 
 **The situation changed on 28 Aug 2026 and most of what used to be written here is out of date.**
 `fixtures.csv` carried Premier League rows for the first time, the round was sealed, and the project
@@ -845,7 +957,14 @@ what replaces it is smaller: the schedule now asks twice a week and the answer i
 2026 and `PREMIER_LEAGUE_ROWS_SEEN` is `10`. Append to it when a fetch is taken by hand and tells
 you something the log does not.
 
-**Two issues worth filing, neither in scope anywhere yet:**
+**Three issues worth filing, none in scope anywhere yet:**
+
+- **Is a Pre-Match Reading better than the Sealed Prediction it followed?** Stage 18 built the store
+  that makes the question answerable and deliberately did not answer it — it needs a season of
+  Readings. The measurement is a straight scoreboard over `outputs/prematch/` against the same
+  Fixtures in `outputs/live/`, and the answer decides nothing about the track record either way:
+  the sealed forecast stays the record because it is the one made before the round.
+
 
 - **The live Season Projection.** `projection_rounds(..., live=True)` exists and `slate_at` cannot
   be fed: a projection needs every remaining Fixture of the campaign, and the fourth fetch reached
@@ -894,9 +1013,12 @@ python -m epl.live upcoming    # what the rolling fixtures file holds, and what 
 python -m epl.live seal        # predict the upcoming round, write it to outputs/live/, commit it
 python -m epl.live seal --push # and push it — what makes it evidence off the machine that made it
 python -m epl.live score       # ingest results, then score what has been sealed
+python -m epl.live prematch    # read whatever kicks off within the hour, afresh, after the seal
+python -m epl.live prematch --dry-run --no-commit   # the same, writing nothing
 deploy/run_live.sh seal --push # the same, in the container the Pi's crontab fires (deploy/README.md)
 python -m epl.bot check        # what the bot would say about the schedule, sending nothing
-python -m epl.bot serve        # poll Telegram for commands: /round /live /board /health
+python -m epl.bot answer /week # print one command's reply to the terminal, sending nothing
+python -m epl.bot serve        # poll Telegram: /next /week /disagree /club /results /record ...
 python -m epl.bot notify seal  # what deploy/run_live.sh calls after every fire; always exits 0
 pytest                         # add --run-network to also hit football-data.co.uk
 ```

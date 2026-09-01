@@ -80,16 +80,41 @@ class Command:
 #: The bot's whole vocabulary. This tuple is both the dispatch table and the "/" menu registered
 #: with Telegram, so the two cannot drift — a command that answers and is not offered is invisible,
 #: and one that is offered and does not answer is a bug reported by a phone.
+#:
+#: **Ordered for a reader, not alphabetically.** The two commands somebody opens the app to use are
+#: first, the retrospective pair next, and the machine's own health last — because this tuple is
+#: also the "/" menu Telegram renders, and a menu whose first entry is a diagnostic is a menu
+#: written for the person who built the bot.
 COMMANDS: tuple[Command, ...] = (
     Command(
-        "round",
-        "The current Sealed Prediction Round",
-        lambda argument, now: answers.sealed_round(argument or None),
+        "next",
+        "The next match and its odds",
+        lambda argument, now: answers.next_match(now),
     ),
     Command(
-        "live",
-        "The Live Season board",
-        lambda argument, now: answers.live_board(),
+        "week",
+        "Every match in the current round",
+        lambda argument, now: answers.round_digest(argument or None),
+    ),
+    Command(
+        "disagree",
+        "Model against the bookmakers",
+        lambda argument, now: answers.disagreements(argument or None),
+    ),
+    Command(
+        "club",
+        "One club, e.g. /club arsenal",
+        lambda argument, now: answers.for_club(argument, now),
+    ),
+    Command(
+        "results",
+        "How the last round turned out",
+        lambda argument, now: answers.last_results(),
+    ),
+    Command(
+        "record",
+        "How the forecasts have scored",
+        lambda argument, now: answers.live_record(),
     ),
     Command(
         "board",
@@ -97,27 +122,44 @@ COMMANDS: tuple[Command, ...] = (
         lambda argument, now: answers.evaluation_board(),
     ),
     Command(
+        "explain",
+        "What the numbers mean",
+        lambda argument, now: answers.explain(),
+    ),
+    Command(
         "health",
-        "Did the schedule fire, and is anything quiet?",
-        lambda argument, now: answers.health(fires.read(), now=now),
+        "Is the schedule still running?",
+        # Every log, not just the loop's: `prematch` writes to its own file (`epl.bot.fires.LOGS`)
+        # and a reader asking whether the schedule is alive means all of it.
+        lambda argument, now: answers.health(fires.read_every(), now=now),
     ),
     Command(
         "help",
         "This menu",
-        lambda argument, now: answers.help_text(),
+        lambda argument, now: answers.help_text(COMMANDS),
     ),
 )
 
 
 #: Spellings that mean one of the commands above. Deliberately not entries in :data:`COMMANDS`,
-#: because that tuple is also the "/" menu and Telegram already offers `/start` itself — listing it
-#: twice is clutter in the one place a reader is looking for what the bot can do.
+#: because that tuple is also the "/" menu and a menu that lists three names for one answer is a
+#: menu that makes the bot look bigger than it is.
 #:
 #: `/start` is there because it is the *first* thing anybody sends a bot: the button Telegram shows
 #: on an unopened conversation sends exactly that, and a first reply of "No such command" is a poor
 #: account of a bot that in fact works. Measured on the first real deployment (issue #20), where
 #: pressing Start was also the step that let the push half deliver at all.
-ALIASES: dict[str, str] = {"start": "help"}
+#:
+#: `/round` and `/live` are the names `/week` and `/record` replaced. They are kept as aliases
+#: rather than deleted for the reason `/start` is here at all: they are in one person's muscle
+#: memory and in this repository's own documentation, and a bot that answers "No such command" to
+#: the name it used last week is a bot that looks broken rather than tidied.
+ALIASES: dict[str, str] = {
+    "start": "help",
+    "round": "week",
+    "live": "record",
+    "commands": "help",
+}
 
 
 def dispatch(text: str, *, now: pd.Timestamp) -> str | None:
@@ -237,6 +279,14 @@ def _report(bot: api.Telegram, announced: set[tuple[int, str]]) -> None:
     ``announced`` is in memory only and is lost on a restart, so a restarted bot repeats itself.
     That is the right way round: a restart is the moment open risk 6 is *most* likely to be true,
     since the commonest reason this process stopped is the machine it runs on having stopped.
+
+    **The loop's log only, where `/health` reads every log, and the asymmetry is deliberate.**
+    Both concerns are claims about `seal` fires — which anchor days went by unfired, and whether
+    a round's two fires read the same stale bytes — and :func:`epl.bot.watch.absent` measures
+    its window from the *first* fire it is given. Handing it `prematch` fires would move that
+    window's start to
+    whenever the half-hourly schedule was installed, for no gain: they are filtered out immediately
+    afterwards. `/health` is a different question, asked by a person, and means all of it.
     """
     for concern in watch.concerns(fires.read(), now=fires.uk_now()):
         key = (concern.risk, concern.headline)

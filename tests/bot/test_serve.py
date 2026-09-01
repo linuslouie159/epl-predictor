@@ -148,7 +148,9 @@ class TestTheCommands:
     ) -> None:
         answer = serve.dispatch("/round 2026-08-28", now=pd.Timestamp.now(tz="UTC"))
 
-        assert answer is not None and "2026-08-28" in answer
+        # `/round` is now an alias for `/week`, and the round is named as a day rather than
+        # as its id — the id is still what the argument takes.
+        assert answer is not None and "Friday 28 August" in answer
 
     def test_no_command_writes_anything(self, settings: Settings, project_root: Path) -> None:
         """Criterion 8. The dispatch table is the bot's whole vocabulary, and none of it is a verb.

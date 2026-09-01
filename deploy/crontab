@@ -44,10 +44,36 @@
 # means a future cron that starts honouring it shifts them a second time.
 CRON_TZ=Europe/London
 
+# WHY prematch RUNS EVERY HALF HOUR, AND ONLY BETWEEN 11:00 AND 22:00.
+#
+# It takes a Pre-Match Reading of whatever kicks off in 45 to 75 minutes (epl.live.prematch) and
+# the bot sends one card per match. Against a window that wide, firing on the hour and the half
+# hour catches every Premier League kickoff, all of which fall on a quarter past, half or o'clock:
+# 20:00 is caught at 19:00, 17:30 at 16:30, 12:30 at 11:30, 16:30 at 15:30, a midweek 19:45 twice.
+# The store's own dedupe absorbs the second sighting (epl.ledger.readings.already_read).
+#
+# The hours bound the cost rather than the correctness. The earliest Premier League kickoff is
+# 12:30 and the latest 20:15, so 11:00 to 22:00 covers every one of them with an hour spare at
+# each end, and the twenty-six fires outside it would each have found nothing.
+#
+# IT IS CHEAP WHEN THERE IS NOTHING DUE, and that is what makes twenty-two fires a day affordable.
+# `epl.live.__main__._prematch` asks the sealed store first — one small file, no network — and
+# exits 0 having printed one line. Only a fire with something in its window pays for a fetch, a
+# rebuild of the match table and a fit.
+#
+# IT SHARES THE LOCK with the two commands above, deliberately. Two containers committing into one
+# checkout at once is a corrupt index, so a prematch fire that lands inside a slow `score` stands
+# down quietly. That costs at most one of the two chances a Fixture gets, which is the right way
+# round: the loop that seals and scores matters more than a message about one match.
+#
+# NOTHING HERE READS A ROUND IT COULD SEAL. `prematch` writes only to outputs/prematch/, which is
+# not a Sealed Prediction store and is not scored (epl.ledger.readings). The sealed round stands.
+
 # m  h  dom mon dow  command
   0  6  *   *   2,5  __ROOT__/deploy/run_live.sh score
   0 16  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push
  30 18  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push
+0,30 11-22 *  *   *  __ROOT__/deploy/run_live.sh prematch --push
 
 # Nothing here fires more often than that, and nothing here runs `python -m epl.ledger backfill`.
 # The Evaluation Window is over closed Seasons and must go on meaning the same thing from one week

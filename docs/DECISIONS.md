@@ -1793,6 +1793,136 @@ container that cannot resolve `api.telegram.org` on the Pi's bridge network. `py
 check` exists for exactly that, and sends nothing — proving the wiring by sending a real message is
 the worst available way to discover it is wrong.
 
+## The pre-match message, and a third store
+
+Issue #20's bot was built as a monitor: it answered "did the schedule fire?" and printed boards. It
+is now also read by somebody who wants to know who is going to win, and that reader was asking for
+two things it did not do. Every message is reformatted for them; the second thing needed a decision.
+
+### The reader asked for a fresh number before every match, and that number cannot be a Sealed Prediction
+
+The request was a message about an hour before each kickoff carrying the odds on that one match. The
+obvious implementation is to re-read the row already sealed for the round, and that would have been
+safe, honest and slightly disappointing — the sealed number never changes between Friday and Sunday,
+so eight of the ten messages in a weekend would be a re-run of the same forecast.
+
+The repository owner asked for a **fresh run** instead, and the reason it is worth building is not
+convenience. A Prediction Round anchored to Friday is played Friday to Monday. A forecast recomputed
+at four o'clock on Sunday has seen Friday's and Saturday's results; the sealed one had not. That is
+a genuinely larger information set, and the numbers really do move on it.
+
+It is also exactly why such a number **cannot go in `outputs/live/`**. In that store a later As-Of
+Instant for the same Predictor and Fixture means one thing and one thing only: a superseding
+revision correcting a bug (ADR 0005). The scoreboard keeps the latest instant per Fixture. So a
+Reading written there would silently replace the honest before-the-round forecast with one taken
+after two results were in — on every Fixture, every week — and the live track record would improve
+for a reason no reader could see and no audit would flag. That is not a variant of ADR 0005's
+failure mode; it is that failure mode, arriving through a door the store did not previously have.
+
+### So there are three stores now, and the third is not regenerable either
+
+`outputs/backtest/` is gitignored because a Backtest Prediction is reproducible: rerun the pipeline
+and it comes back identical, which is what makes it disposable. A **Pre-Match Reading** (CONTEXT.md)
+is not. The corpus it was cut from has grown since it was taken, so re-running the same code
+tomorrow gives a different number and there is no way back to the old one. Evidence that cannot be
+regenerated is evidence, so `outputs/prematch/` is committed and pushed — beside the sealed store
+rather than inside it.
+
+Three rules keep it from becoming a fourth way to write a Prediction:
+
+- One file per calendar day, appended to as that day's matches come up. Named after the kickoff day
+  rather than the round, because a round spans four afternoons and four separate fires.
+- The same row schema as both other stores, so `epl.ledger.schema.audit` applies unchanged and a
+  Reading that had somehow seen its own Fixture's result would be refused by the existing check.
+- **Nothing in it reaches the scoreboard.** `epl.ledger.stored` concatenates the backtest and sealed
+  stores and does not know this one exists. Checked rather than asserted:
+  `tests/live/test_prematch.py` scores the Live Season with Readings on disk and with none, and
+  compares the two boards.
+
+The second fire of a pair is quiet because the store answers the question — a Fixture already read
+is no longer due — rather than because a marker file somebody has to keep in step says so. Same
+argument as `epl.ledger.live.is_sealed`. And where the sealed store insists a later row supersede an
+earlier one, this store keeps the **first** Reading and drops the second: there a later row is a
+correction somebody made deliberately, here it is the schedule doing its job twice, and the first
+Reading is the one that was actually sent.
+
+**Whether a Reading actually beats the Prediction it was taken after is an open question**, and
+deliberately not answered here. It needs a season of them. The store exists so that it *can* be
+asked later; measuring it is its own ticket.
+
+### The schedule fires forty times harder, and had to get cheaper to match
+
+`prematch` runs every half hour from 11:00 to 22:00 against a window of 45 to 75 minutes before
+kickoff. That cadence and that window are one decision: every Premier League kickoff falls on a
+quarter-hour, so each is inside at least one fire's window — 20:00 caught at 19:00, 17:30 at 16:30,
+12:30 at 11:30 — and most are inside two, which the store's dedupe absorbs.
+`tests/live/test_prematch.py` checks the cadence against the window rather than trusting the
+arithmetic in this paragraph.
+
+Most of those twenty-two daily fires have nothing to do, so the expensive half sits behind a cheap
+one. `epl.live.__main__._prematch` asks the sealed store first — one small file, no network, no fit
+— and exits 0 having printed one line. Only a fire with a Fixture in its window pays for a refresh
+of the Live Season, a rebuild of the match table and a run of every Predictor.
+
+Two consequences worth writing down. It **shares the loop's flock**, deliberately: two containers
+committing into one checkout is a corrupt index, so a prematch fire landing inside a slow `score`
+stands down, costing at most one of the two chances a Fixture gets. And it writes to its **own log**,
+`deploy/logs/prematch.log`, because `live_loop.log` is the file a person opens when something has
+gone wrong and it holds three fires a week; burying those under a thousand lines saying nothing
+kicks off within the hour would cost that file the thing it is for. Both logs share a format and a
+parser, and `/health` reports the last fire of each.
+
+### The messages themselves, and the three ways formatting fails silently
+
+Every message is now composed through `epl.bot.render`, which owns the markup, and sent as Telegram
+HTML rather than plain text. That reverses stage 17's choice, for stage 17's own stated reason:
+plain text was chosen because a Markdown parse error on a Club name with an apostrophe is a message
+that does not arrive. HTML needs three characters escaped where MarkdownV2 needs eighteen,
+`html.escape` is mechanical rather than a judgement made per string, and `api.Telegram.send` now
+retries once as plain text if Telegram refuses to parse — so the failure lands on the formatting
+rather than on the delivery. Going quiet is still the thing that must not happen.
+
+The parse mode buys one thing: a fixed-width block, so a column of probabilities lines up. That
+introduces the one new way to be wrong, and it is invisible from every machine this is developed on.
+**A line too wide for a phone wraps, and a wrapped line inside a fixed-width block has lost the
+alignment the block existed for.** `render.PRE_WIDTH` is a 44-character budget and
+`tests/bot/test_render.py` applies it to every message the bot can send, with exactly one exemption:
+`answers.failure`, which quotes the loop's own output and must not re-wrap somebody's log. The
+exemption is named in the test rather than left as a message the sweep quietly does not cover.
+
+The same sweep also enforces that every message is pure ASCII. The repository owner asked for no
+emoji; ASCII is the checkable form of that, because a bullet character is not an emoji and renders
+as a box on the devices that lack the glyph. Prose written elsewhere in the repository — a
+Predictor's `note`, quoted whole, and the loop's own output — passes through `render.asciify`, which
+maps a closed set of typographic punctuation and never touches a word.
+
+Two smaller decisions made for the same reader. Club short names live in `epl.bot.render` and not in
+`clubs.csv`, because `epl.clubs.build` regenerates that table from its own mapping and would erase
+them, and because what to call Wolverhampton Wanderers in a chat window is a fact about the chat
+window. They are derived by a rule — drop a droppable suffix — with a collision check that reverts
+to the canonical name, so Bristol City and Bristol Rovers keep their full names rather than both
+becoming "Bristol". And three probabilities are rounded by largest remainder so they always sum to
+100: a card reading 59 / 23 / 19 invites a question whose honest answer is "three separate
+roundings", which is not something anybody wants in a message about football.
+
+### What the commands became
+
+Five commands became ten, and two of the five were renamed rather than kept. `/round` printed every
+Predictor's three probabilities under every Fixture, which is the table that made it unreadable; it
+is now `/week`, one line per match. `/live` is now `/record`. Both old names survive as aliases,
+because they are in one person's muscle memory and in this repository's own documentation, and a bot
+that answers "No such command" to the name it used last week looks broken rather than tidied.
+
+The detail `/round` used to carry did not disappear, it moved. A single-match card has room for it,
+so `/next` and `/club` list every other Predictor that spoke on that Fixture beneath the model and
+the market. That keeps issue #20's first criterion — what each Predictor said — met, without putting
+a four-column table under ten Fixtures.
+
+`/disagree` is the one command with no equivalent anywhere else in the project: the Fixtures where
+the model and the Market Line are furthest apart. The whole scoreboard is an argument about whether
+the model can keep up with the market, and this is where it is currently saying something different.
+`/board` survives unchanged and still refuses on the Pi, which is its correct answer.
+
 ## Open risks
 
 1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.

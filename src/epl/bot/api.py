@@ -18,6 +18,12 @@ worse than none — so :meth:`Telegram.send` swallows everything and reports a b
 bot's own main loop: a failure there is the bot's to handle, and one of them,
 :class:`Conflict`, must stop it dead rather than be retried.
 
+**A message Telegram will not parse is sent again without the markup**, rather than dropped. Every
+message is composed as HTML (:mod:`epl.bot.render`) so that a column of probabilities lines up, and
+that is a new way for a send to fail that plain text did not have. The failure has to land on the
+formatting rather than on the delivery: an unformatted message that arrives says what it came to
+say, and a bot that goes quiet is the thing this whole package exists to notice.
+
 **Two pollers on one token silently eat each other's updates.** Telegram hands each update to
 whichever asked first, so a forgotten instance does not conflict visibly — it steals half the
 replies, and the half that arrives makes the bot look like it is working. Telegram answers the
@@ -34,6 +40,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from epl.bot import render
 from epl.bot.settings import BotError, Settings
 
 #: Telegram's own limit on one message. Longer answers are split rather than truncated — a
@@ -51,6 +58,17 @@ POLL_SECONDS = 30
 #: Every method this bot calls. Written down because it is the whole of its Telegram surface, and
 #: because a fifth appearing here should be a decision rather than a diff.
 METHODS: tuple[str, ...] = ("getMe", "setMyCommands", "getUpdates", "sendMessage")
+
+#: The opening and closing of a fixed-width block, as :func:`epl.bot.render.block` writes them.
+#: Named here because :func:`split` has to be able to reopen one across a chunk boundary, and a
+#: second spelling of the tag is how the splitter would come to close something it had not opened.
+BLOCK_OPEN = "<pre>"
+BLOCK_CLOSE = "</pre>"
+
+#: What Telegram says when it will not parse a message. Matched loosely on purpose: the exact
+#: wording has changed more than once ("can't parse entities", "Bad Request: can't parse message
+#: text"), and the reaction — send it again without markup — is right for all of them.
+PARSE_COMPLAINT = "parse"
 
 
 class TransportError(BotError):
@@ -90,22 +108,48 @@ class Telegram:
         correctly — the point of failing soft is that the run carries on — but the notifier prints
         it, because a bot that has silently stopped delivering is the failure this whole package is
         about.
+
+        A chunk Telegram refuses to *parse* is sent once more as plain text. That is a narrower
+        retry than it looks: a refusal for any other reason — a chat that blocked the bot, a rate
+        limit — is reported rather than retried, because sending the same thing again would not fix
+        it and this method is called from inside a scheduled run.
         """
         landed = True
         for chunk in split(text):
-            try:
-                answer = self._call(
-                    "sendMessage",
-                    {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True},
-                    timeout=20.0,
-                )
-            except Exception as unreachable:
-                print(f"[epl.bot] send to {chat_id} failed: {type(unreachable).__name__}")
+            outcome = self._deliver(chat_id, chunk, parse_mode=render.PARSE_MODE)
+            if outcome is False:
                 return False
-            if not answer.get("ok"):
-                print(f"[epl.bot] send to {chat_id} refused: {answer.get('description')}")
-                landed = False
+            landed = landed and outcome is True
         return landed
+
+    def _deliver(self, chat_id: int, chunk: str, *, parse_mode: str | None) -> bool | None:
+        """One chunk. ``True`` landed, ``None`` refused, ``False`` the transport is unreachable.
+
+        Three answers rather than two because they need three different reactions: an unreachable
+        transport ends the whole message, a refusal does not, and only a refusal about the markup is
+        worth trying again without it.
+        """
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "disable_web_page_preview": True,
+        }
+        if parse_mode is not None:
+            payload["parse_mode"] = parse_mode
+        try:
+            answer = self._call("sendMessage", payload, timeout=20.0)
+        except Exception as unreachable:
+            print(f"[epl.bot] send to {chat_id} failed: {type(unreachable).__name__}")
+            return False
+        if answer.get("ok"):
+            return True
+
+        description = str(answer.get("description") or "")
+        if parse_mode is not None and _is_a_parse_error(description):
+            print(f"[epl.bot] send to {chat_id} would not parse; retrying as plain text")
+            return self._deliver(chat_id, render.strip_tags(chunk), parse_mode=None)
+        print(f"[epl.bot] send to {chat_id} refused: {description}")
+        return None
 
     def broadcast(self, text: str) -> int:
         """Send to everyone on the notify list, and return how many were reached.
@@ -171,6 +215,12 @@ def split(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
     Prediction Rounds, and one cut off after the fourth Predictor is not a shorter answer but a
     different and misleading one. A single line longer than the limit is cut, because there is
     nothing else to do with it.
+
+    **A chunk boundary inside a fixed-width block closes the block and reopens it.** Without that,
+    splitting a long digest produces one chunk with an unclosed tag and one with an unopened one,
+    and Telegram refuses both — so a message would go missing at exactly the length that makes it
+    worth sending. The reopened block is what a reader wants anyway: a table continued across two
+    messages is still a table.
     """
     if len(text) <= limit:
         return [text]
@@ -178,21 +228,44 @@ def split(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
     chunks: list[str] = []
     current: list[str] = []
     length = 0
+    inside = False
+
+    def close() -> None:
+        """End the chunk being built, sealing an open block so each chunk parses on its own."""
+        nonlocal current, length
+        body = "\n".join(current)
+        chunks.append(body + BLOCK_CLOSE if inside else body)
+        current, length = ([BLOCK_OPEN] if inside else []), (len(BLOCK_OPEN) if inside else 0)
+
     for line in text.splitlines():
         while len(line) > limit:
             if current:
-                chunks.append("\n".join(current))
-                current, length = [], 0
+                close()
             chunks.append(line[:limit])
             line = line[limit:]
-        if length + len(line) + 1 > limit and current:
-            chunks.append("\n".join(current))
-            current, length = [], 0
+        if length + len(line) + 1 + len(BLOCK_CLOSE) > limit and current:
+            close()
         current.append(line)
         length += len(line) + 1
-    if current:
-        chunks.append("\n".join(current))
+        inside = _inside_a_block(inside, line)
+    if any(part.strip() for part in current):
+        chunks.append("\n".join(current) + (BLOCK_CLOSE if inside else ""))
     return chunks
+
+
+def _inside_a_block(inside: bool, line: str) -> bool:
+    """Whether a fixed-width block is still open after this line.
+
+    Counted rather than toggled, because :func:`epl.bot.render.block` writes both tags inline — a
+    one-line table is ``<pre>...</pre>`` entire, and a toggle would report it as having opened one.
+    """
+    depth = int(inside) + line.count(BLOCK_OPEN) - line.count(BLOCK_CLOSE)
+    return depth > 0
+
+
+def _is_a_parse_error(description: str) -> bool:
+    """Whether Telegram refused this message because of its markup rather than its delivery."""
+    return PARSE_COMPLAINT in description.lower()
 
 
 def http_caller(token: str) -> Caller:
@@ -216,9 +289,12 @@ def http_caller(token: str) -> Caller:
 
 
 __all__ = [
+    "BLOCK_CLOSE",
+    "BLOCK_OPEN",
     "CHUNK_LIMIT",
     "MESSAGE_LIMIT",
     "METHODS",
+    "PARSE_COMPLAINT",
     "POLL_SECONDS",
     "Caller",
     "Conflict",

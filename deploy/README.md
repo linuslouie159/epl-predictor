@@ -172,3 +172,12 @@ Four things worth knowing before touching it:
 - **Do not let a notify failure fail the run.** `deploy/run_live.sh` exits with the *loop's* code
   and `python -m epl.bot notify` exits 0 whatever happens. Monitoring that can take down the thing
   it monitors is worse than none.
+- **Do not point `prematch` at `outputs/live/`.** It writes Pre-Match Readings to
+  `outputs/prematch/`, a separate committed store that is never scored. A Reading is stamped an hour
+  before kickoff, *after* its round was sealed, so it has seen results the sealed forecast had not;
+  in the sealed store a later instant means a superseding bug fix and the scoreboard keeps the
+  latest one, so admitting Readings there would improve the live track record every week for a
+  reason nobody could see. See `outputs/prematch/README.md`.
+- **`prematch` is optional and the rest of the schedule does not depend on it.** Drop its crontab
+  line and the loop still seals, scores and pushes and the bot still answers every command; what is
+  lost is the message an hour before each kickoff.

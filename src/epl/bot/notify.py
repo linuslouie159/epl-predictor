@@ -37,6 +37,7 @@ import pandas as pd
 import epl.ledger as ledger
 from epl.bot import answers, api, fires, watch
 from epl.bot.settings import BotError, Settings
+from epl.ledger import readings
 from epl.paths import live_dir, outputs_dir
 
 #: What a `score` fire leaves behind when it scored something. `epl.live.__main__._score` writes it
@@ -59,19 +60,24 @@ def run(
     ``None`` when there was nothing to say, which is most fires. Never raises: every failure path
     prints and returns, because this is called from inside a scheduled run whose exit code means
     something.
+
+    A `prematch` fire can be worth *several* messages — three matches kick off at three o'clock on a
+    Saturday and each gets its own card, because a card is about one match and nothing else. They
+    are sent as separate messages rather than one long one for the same reason: a notification
+    reading "Chelsea v Brighton" is useful, and one reading "3 matches" is a thing to open later.
     """
     try:
-        message = compose(subcommand, found=found)
+        messages = compose_all(subcommand, found=found)
     except Exception as broke:
         print(f"[epl.bot] could not compose a message: {type(broke).__name__}: {broke}")
         return None
-    if message is None:
+    if not messages:
         return None
 
     try:
         resolved = settings or Settings.from_environment()
         bot = telegram or api.Telegram(resolved)
-        reached = bot.broadcast(message)
+        reached = sum(bot.broadcast(message) for message in messages)
     except BotError as unset:
         print(f"[epl.bot] not sending: {unset}")
         return None
@@ -79,29 +85,96 @@ def run(
         print(f"[epl.bot] send failed: {type(unreachable).__name__}: {unreachable}")
         return None
 
-    print(f"[epl.bot] notified {reached} chat(s)")
-    return message
+    print(f"[epl.bot] notified {reached} chat(s) with {len(messages)} message(s)")
+    return "\n\n".join(messages)
+
+
+def compose_all(subcommand: str, *, found: Sequence[fires.Fire] | None = None) -> list[str]:
+    """Every message this fire is worth sending, in order. Usually none, sometimes one.
+
+    The list exists for `prematch` alone; every other fire has at most one thing to say, and
+    :func:`compose` is the way to ask for it.
+    """
+    ledger.register_all()
+    log = (
+        fires.read(subcommand=subcommand) if found is None else tuple(found)
+    )
+    fire = fires.latest(log, subcommand=subcommand)
+    if fire is None:
+        return []
+    if fire.failed:
+        return [answers.failure(fire)]
+    if subcommand == "prematch":
+        return _about_a_prematch(fire)
+    message = _about_one_fire(subcommand, fire, log)
+    return [] if message is None else [message]
 
 
 def compose(subcommand: str, *, found: Sequence[fires.Fire] | None = None) -> str | None:
     """What this fire is worth saying, or ``None``.
 
     Pure apart from reading the log and two directories' modification times, which is what lets the
-    whole decision be tested without a token.
+    whole decision be tested without a token. A `prematch` fire with several cards comes back
+    joined, which is right for a caller asking what this fire had to say and is not how it is
+    sent: :func:`run` sends the cards one at a time.
     """
-    ledger.register_all()
-    log = fires.read() if found is None else tuple(found)
-    fire = fires.latest(log, subcommand=subcommand)
-    if fire is None:
-        return None
+    messages = compose_all(subcommand, found=found)
+    return "\n\n".join(messages) if messages else None
 
-    if fire.failed:
-        return answers.failure(fire)
+
+def _about_one_fire(
+    subcommand: str, fire: fires.Fire, log: Sequence[fires.Fire]
+) -> str | None:
     if subcommand == "seal":
         return _about_a_seal(fire, log)
     if subcommand == "score":
         return _about_a_score(fire)
     return None
+
+
+def _about_a_prematch(fire: fires.Fire) -> list[str]:
+    """One card per Fixture this fire read, and nothing at all when it read none.
+
+    Nothing at all is the overwhelmingly common case — forty fires a matchday against ten Fixtures a
+    round — which is why this is decided from the artefact rather than the exit code: a Reading
+    written since the fire started is the whole question, and both silences exit 0 on purpose
+    (:data:`epl.live.prematch.NOTHING_DUE`).
+
+    The Readings are read back from the store rather than parsed out of the log, for the same reason
+    a `seal` announcement is: a reworded line must not be able to silence the bot, and the numbers
+    in the message have to be the numbers that were written down.
+    """
+    fresh = _readings_since(fire.started)
+    if fresh.empty:
+        return []
+    cards = [
+        answers.prematch_card(one, now=fires.uk_now())
+        for _, one in fresh.groupby(["home_club", "away_club"], sort=False)
+    ]
+    # A card comes back empty when the Predictor the messages are built around said nothing about
+    # that Fixture, which is not impossible and is not this module's business to explain. Dropped
+    # rather than sent: Telegram refuses an empty message outright, so passing one on would turn a
+    # Fixture nobody could forecast into a send failure in the log.
+    return [card for card in cards if card.strip()]
+
+
+def _readings_since(moment: pd.Timestamp) -> pd.DataFrame:
+    """Pre-Match Readings written at or after this fire started.
+
+    Cut by the file's modification time rather than by the rows' As-Of Instant, because a day's file
+    is appended to: the rows an earlier fire wrote are still in it, and announcing them again would
+    send a second card for a match that already had one. Same artefact-not-prose rule as everywhere
+    else here, and the same comparison in UTC as :func:`_written_since`.
+    """
+    day = readings.path(pd.Timestamp(moment).tz_convert(fires.LOCAL_ZONE).tz_localize(None))
+    if not _written_since([day], moment):
+        return readings.read_day(pd.Timestamp(day.stem)).iloc[0:0]
+
+    held = readings.read_day(pd.Timestamp(day.stem))
+    if held.empty:
+        return held
+    threshold = pd.Timestamp(moment).tz_convert(fires.LOCAL_ZONE).tz_localize(None)
+    return held.loc[held["as_of_instant"] >= threshold].reset_index(drop=True)
 
 
 def _about_a_seal(fire: fires.Fire, log: Sequence[fires.Fire]) -> str | None:
@@ -160,4 +233,4 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["SCORED_BOARD", "compose", "main", "run"]
+__all__ = ["SCORED_BOARD", "compose", "compose_all", "main", "run"]

@@ -90,6 +90,14 @@ _Avoid_: live prediction, logged prediction
 A Prediction reproduced from history by re-running the pipeline. Regenerable and disposable — its
 value is in the aggregate score, never in any individual row.
 
+**Pre-Match Reading**:
+A Prediction computed roughly an hour before one Fixture's kickoff, after its Prediction Round was
+already sealed, from a corpus that by then holds the results of matches played earlier in the same
+round. Recorded in its own store and never scored: the Sealed Prediction is what the track record
+is made of. Exists so a message sent before a match quotes the best available forecast without that
+forecast quietly replacing the one made before the round.
+_Avoid_: live prediction, updated prediction, refreshed forecast
+
 **Season Projection**:
 A distribution over final league tables, produced by simulating every remaining Fixture many times.
 Yields each Club's probability of the title, of European places, and of relegation.

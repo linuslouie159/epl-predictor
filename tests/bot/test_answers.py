@@ -25,7 +25,7 @@ import pandas as pd
 import pytest
 from log_blocks import THE_FIRE_THAT_PROVED_THE_SCHEDULE, block
 
-from epl.bot import answers, fires
+from epl.bot import answers, fires, serve
 from epl.ledger import scoreboard
 from epl.paths import outputs_dir
 from epl.windows import EVALUATION_WINDOW, season_label
@@ -38,28 +38,41 @@ CAVEATED = ("ceiling_line", "lawrenson", "sutton")
 class TestTheSealedRound:
     """Criterion 1: the round, its Fixtures, and what each Predictor said."""
 
-    def test_it_names_the_round_its_fixtures_and_every_predictor(
+    def test_it_names_the_round_and_its_fixtures(
         self, sealed_store: pd.DataFrame, registered_predictors: None
     ) -> None:
-        text = answers.sealed_round()
+        """The round is named as a day rather than as its id.
 
-        assert "2026-08-28" in text
-        assert "Crystal Palace" in text and "Manchester City" in text
-        assert "Liverpool" in text and "Nottingham Forest" in text
-        for predictor in ("dixon_coles", "elo", "market_line", "naive_baseline"):
-            assert predictor in text
+        A Prediction Round is identified by the ISO date it anchors to, which is the right name in a
+        filename and in a commit message and is a bare number in a chat window. The id is still what
+        `/week 2026-08-28` takes and is still what the store's complaint quotes when a round was
+        never sealed — see the two tests below.
+        """
+        text = answers.round_digest()
 
-    def test_it_quotes_the_probabilities_that_were_sealed(
+        assert "Friday 28 August" in text
+        assert "Palace" in text and "Man City" in text
+        assert "Liverpool" in text and "Forest" in text
+
+    def test_the_digest_quotes_the_model_and_a_card_quotes_the_rest(
         self, sealed_store: pd.DataFrame, registered_predictors: None
     ) -> None:
         """The Predictions are the evidence; a message about them that rounded away the disagreement
-        between two Predictors would be a message about nothing."""
-        text = answers.sealed_round()
+        between two Predictors would be a message about nothing.
 
-        assert "18%" in text  # dixon_coles Home on the first Fixture
-        assert "46%" in text  # naive_baseline Home, which is a different opinion entirely
+        The digest carries one Predictor per Fixture because ten Fixtures times four Predictors is
+        the table that made the old `/round` unreadable. The disagreement is not lost, it moved: a
+        single-match card has room, and `_also_sealed` puts every other Predictor that spoke on it.
+        """
+        digest = answers.round_digest()
+        card = answers.next_match(pd.Timestamp("2026-08-28 12:00"))
 
-    def test_it_says_who_was_silent_and_why(
+        assert "Man City 59" in digest  # dixon_coles, on the Fixture it leads with
+        assert "59%" in card and "19%" in card  # the model and the market, side by side
+        assert "naive_baseline" in card and "46" in card  # a different opinion entirely
+        assert "elo" in card
+
+    def test_it_says_who_said_nothing_and_why(
         self, sealed_store: pd.DataFrame, registered_predictors: None
     ) -> None:
         """Five of nine say nothing about an unplayed Fixture, and a blank column reads as a bug.
@@ -67,27 +80,29 @@ class TestTheSealedRound:
         This is issue #20's "never a Pundit column on the live board" from the other direction: the
         absence is explained where it appears, rather than left for the reader to wonder about.
         """
-        text = answers.sealed_round()
+        text = answers.round_digest()
 
-        assert "silent" in text.lower()
+        assert "Said nothing about this round" in text
         assert "lawrenson" in text and "ceiling_line" in text
+        assert "retrospectively" in text
 
     def test_a_named_round_can_be_asked_for(
         self, sealed_store: pd.DataFrame, registered_predictors: None
     ) -> None:
-        assert "2026-08-28" in answers.sealed_round("2026-08-28")
+        """The id is still the handle, even though the message renders it as a day."""
+        assert "Friday 28 August" in answers.round_digest("2026-08-28")
 
     def test_a_round_that_was_never_sealed_is_said_so_rather_than_invented(
         self, sealed_store: pd.DataFrame, registered_predictors: None
     ) -> None:
-        text = answers.sealed_round("2026-09-04")
+        text = answers.round_digest("2026-09-04")
 
         assert "2026-09-04" in text
         assert "sealed" in text.lower()
 
     def test_an_empty_store_answers_rather_than_raising(self, project_root: Path) -> None:
         """A fresh clone before the first fire. The bot has to be startable there."""
-        assert answers.sealed_round()
+        assert answers.round_digest()
 
 
 class TestTheLiveSeasonBoard:
@@ -96,7 +111,7 @@ class TestTheLiveSeasonBoard:
     def test_it_scores_only_the_fixtures_that_have_been_played(
         self, sealed_store: pd.DataFrame, corpus: Path, registered_predictors: None
     ) -> None:
-        text = answers.live_board()
+        text = answers.live_record()
 
         assert season_label(2026) in text
         assert "market_line" in text
@@ -111,7 +126,7 @@ class TestTheLiveSeasonBoard:
         column would be the raw one under another name — which is the sort of number that gets
         quoted, since it looks like it came from somewhere.
         """
-        text = answers.live_board()
+        text = answers.live_record()
 
         assert scoreboard.CALIBRATED_PREFIX not in text
         for column in scoreboard.POST_CALIBRATION_COLUMNS:
@@ -123,7 +138,7 @@ class TestTheLiveSeasonBoard:
     ) -> None:
         """A live RPS over one round is noise, and noise beside 0.1975 invites the one comparison
         this project exists to prevent. The sample size travels with the number."""
-        text = answers.live_board()
+        text = answers.live_record()
 
         assert "1 Fixture" in text
         assert str(len(EVALUATION_WINDOW)) in text or "Evaluation Window" in text
@@ -138,7 +153,7 @@ class TestTheLiveSeasonBoard:
             columns=["season", "division", "date", "home_club", "away_club", "outcome"]
         ).to_csv(processed_dir() / "matches.csv", index=False)
 
-        text = answers.live_board()
+        text = answers.live_record()
 
         assert "none" in text.lower() or "not" in text.lower()
 
@@ -150,7 +165,7 @@ class TestTheLiveSeasonBoard:
         It must not exit: `epl.ingest.match_table` raises `SystemExit` on a missing file, which is
         right for a command line and would take the bot's process down mid-answer.
         """
-        text = answers.live_board()
+        text = answers.live_record()
 
         assert "epl.ingest" in text or "epl.live score" in text
 
@@ -213,9 +228,9 @@ class TestThingsTheBotMustNotSay:
         """Every answer the bot can produce on this machine, for a sweep over all of them."""
         found = fires.parse(THE_FIRE_THAT_PROVED_THE_SCHEDULE)
         return [
-            answers.help_text(),
-            answers.sealed_round(),
-            answers.live_board(),
+            answers.help_text(serve.COMMANDS),
+            answers.round_digest(),
+            answers.live_record(),
             answers.evaluation_board(),
             answers.health(found, now=pd.Timestamp("2026-08-28 22:00", tz=fires.LOCAL_ZONE)),
         ]
@@ -288,7 +303,7 @@ class TestThingsTheBotMustNotSay:
     ) -> None:
         """It is empty by design and fills in retrospectively (issue #16), and a blank cell reads
         as a bug. The board holds the Predictors that spoke; the absence is explained in words."""
-        text = answers.live_board()
+        text = answers.live_record()
 
         assert "lawrenson" not in text or "#16" in text
 

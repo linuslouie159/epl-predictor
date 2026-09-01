@@ -48,6 +48,21 @@ RUNTIME_DIR = ("deploy", "logs")
 #: seals into — so the two agree by construction rather than by configuration.
 LOG_RELATIVE_PATH = (*RUNTIME_DIR, "live_loop.log")
 
+#: Where `prematch` fires are logged instead, and why they are not in the file above.
+#:
+#: `live_loop.log` is read by a person, and it holds three fires a week. `prematch` fires around
+#: forty times on a matchday and the overwhelming majority of those write one line saying nothing
+#: kicks off within the hour (:data:`epl.live.prematch.NOTHING_DUE`). Mixing them would bury the
+#: three blocks that matter under a thousand that do not, in the one file somebody opens when the
+#: schedule has gone wrong.
+#:
+#: They are still fires and `/health` still reports the last of them — :func:`read` takes a path
+#: precisely so that a second log is a second argument rather than a second parser.
+PREMATCH_LOG_RELATIVE_PATH = (*RUNTIME_DIR, "prematch.log")
+
+#: Which log a subcommand's fires are written to. Anything not named here uses the loop's own.
+LOGS: dict[str, tuple[str, ...]] = {"prematch": PREMATCH_LOG_RELATIVE_PATH}
+
 #: The zone every round window is judged in. A fire's stamp is the *machine's*, and one of the two
 #: has to be converted before they can be compared at all.
 LOCAL_ZONE = "Europe/London"
@@ -183,12 +198,40 @@ def uk_now() -> pd.Timestamp:
     return pd.Timestamp.now(tz=LOCAL_ZONE)
 
 
-def log_path() -> Path:
-    """Where the schedule writes, in the clone this process is running inside."""
-    return project_root().joinpath(*LOG_RELATIVE_PATH)
+def wall_clock(moment: pd.Timestamp) -> pd.Timestamp:
+    """An aware instant as the naive UK wall-clock reading a kickoff is comparable with.
+
+    The bot holds both shapes on purpose and must not mix them: :func:`uk_now` is aware because a
+    fire's stamp carries the machine's offset, and every kickoff and As-Of Instant in the ledger is
+    naive because that is how Football-Data writes them (:func:`epl.ledger.live.uk_now` says why).
+    Comparing the two raises rather than misreporting, which is the only reason both are safe to
+    have — and a bot that answers "the next match" has to cross the line, because the moment comes
+    from one side and the kickoff from the other.
+
+    So the crossing is made once, here, beside the pair it reconciles. Spelt inline at each call
+    site it would be three ``tz_convert`` chains, and the one that stopped converting would answer
+    with a match an hour in the past without ever looking wrong.
+
+    A naive moment is passed through unchanged. That is not laxity: a test hands a naive instant
+    because the store it is checking against is naive, and converting one that carries no zone
+    would be inventing an offset.
+    """
+    stamped = pd.Timestamp(moment)
+    if stamped.tz is None:
+        return stamped
+    return stamped.tz_convert(LOCAL_ZONE).tz_localize(None)
 
 
-def read(path: Path | None = None) -> tuple[Fire, ...]:
+def log_path(subcommand: str | None = None) -> Path:
+    """Where the schedule writes, in the clone this process is running inside.
+
+    ``subcommand`` names which log, because `prematch` has its own (:data:`LOGS`). Defaulting to
+    the loop's keeps every existing caller reading the file it always read.
+    """
+    return project_root().joinpath(*LOGS.get(str(subcommand), LOG_RELATIVE_PATH))
+
+
+def read(path: Path | None = None, *, subcommand: str | None = None) -> tuple[Fire, ...]:
     """Every fire the log holds, oldest first.
 
     A log that has never been written is no fires rather than an error: on a fresh clone the bot
@@ -197,10 +240,23 @@ def read(path: Path | None = None) -> tuple[Fire, ...]:
     and written by a shell redirect, and a notifier that fell over on a truncated write would be
     silent in exactly the way it exists to prevent.
     """
-    log = log_path() if path is None else Path(path)
+    log = log_path(subcommand) if path is None else Path(path)
     if not log.exists():
         return ()
     return parse(log.read_text(encoding="utf-8", errors="replace"))
+
+
+def read_every() -> tuple[Fire, ...]:
+    """Every fire from every log this schedule writes, oldest first.
+
+    What `/health` reports over, because a reader asking whether the schedule is alive means all of
+    it. Sorted across the files rather than concatenated: the two logs are written by the same
+    crontab on the same machine, so their stamps interleave, and a listing that put forty `prematch`
+    fires after Tuesday's `seal` would misreport the order things happened in.
+    """
+    seen = {LOG_RELATIVE_PATH, *LOGS.values()}
+    found = [fire for relative in seen for fire in read(project_root().joinpath(*relative))]
+    return tuple(sorted(found, key=lambda fire: fire.started))
 
 
 def parse(text: str) -> tuple[Fire, ...]:
@@ -278,9 +334,11 @@ __all__ = [
     "END_MARKER",
     "FAILED",
     "LOCAL_ZONE",
+    "LOGS",
     "LOG_RELATIVE_PATH",
     "NOTHING_IN_FILE",
     "OUTSIDE_EVERY_WINDOW",
+    "PREMATCH_LOG_RELATIVE_PATH",
     "RUNTIME_DIR",
     "RUN_MARKER",
     "SILENCES",
@@ -292,5 +350,7 @@ __all__ = [
     "log_path",
     "parse",
     "read",
+    "read_every",
     "uk_now",
+    "wall_clock",
 ]
