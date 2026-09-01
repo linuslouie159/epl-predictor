@@ -20,6 +20,7 @@ with.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import pandas as pd
 import pytest
@@ -395,3 +396,110 @@ class TestTheMessagesThePushHalfSends:
 
         assert "rolling file" in text
         assert "open risk 7" in text
+
+
+class TestWhatIsWorthBacking:
+    """`/bet`, and the two ways it could mislead.
+
+    The command answers two questions that a reader arrives believing are one question: which side
+    wins, and which price is wrong. They are not the same and they almost never name the same
+    Fixture, because a side the model makes a heavy favourite is a side the book has priced as one.
+    Reporting either under the other's name would be the whole feature going wrong quietly, so both
+    the separation and the caveat that travels with it are pinned here.
+    """
+
+    #: A book that is genuinely wrong about one Outcome, which is what value means.
+    #:
+    #: The model makes the away side 59% on both Fixtures (`tests/bot/conftest.py`). Here the first
+    #: match is priced at 2.00 — an implied 50% — so backing it returns 0.59 * 2.00 - 1 = +18% on
+    #: the model's numbers. The second is priced at 1.60, which is shorter than the model's own
+    #: opinion, so it offers nothing. One of two, which is what a real card looks like.
+    MISPRICED: ClassVar[dict[tuple[str, str], tuple[float, float, float]]] = {
+        ("crystal_palace", "man_city"): (5.0, 4.0, 2.0),
+        ("liverpool", "nottm_forest"): (5.0, 4.0, 1.6),
+    }
+
+    def test_it_separates_the_likely_winner_from_the_price_worth_backing(
+        self, sealed_store: pd.DataFrame, registered_predictors: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(answers, "_offered_odds", lambda: self.MISPRICED)
+
+        text = answers.value(pd.Timestamp("2026-08-28 12:00"))
+
+        assert "MOST LIKELY TO WIN" in text
+        assert "WHERE THE MODEL SEES VALUE" in text
+
+    def test_every_message_carries_the_finding_that_the_market_scores_better(
+        self, sealed_store: pd.DataFrame, registered_predictors: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The most important sentence in the message, and the one a future edit is most likely to
+        trim for length. The market beats this model over the Evaluation Window, so every value
+        line is the model contradicting the better-scoring of the two."""
+        monkeypatch.setattr(answers, "_offered_odds", lambda: self.MISPRICED)
+
+        text = answers.value(pd.Timestamp("2026-08-28 12:00"))
+
+        assert f"{answers.MARKET_RPS:.4f}" in text
+        assert f"{answers.MODEL_RPS:.4f}" in text
+        assert answers.MARKET_RPS < answers.MODEL_RPS  # lower is better; the market wins
+
+    def test_the_expected_return_is_worked_against_the_offered_price(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """The arithmetic, checked directly rather than through a message.
+
+        A stake returns the price when the Outcome lands and nothing when it does not, so its
+        expected value is ``probability * price - 1``. Working it against the vig-removed Market
+        Line instead would overstate every edge on the board by the overround.
+        """
+        row = answers._fixtures(sealed_store).iloc[0]
+        model = answers._model(row)
+        # A price exactly fair to the model on the away Outcome: no edge either way.
+        offered = {("crystal_palace", "man_city"): (1.01, 1.01, 1.0 / model[2])}
+
+        index, expected, price = answers._best_return(row, offered)
+
+        assert index == 2
+        assert expected == pytest.approx(0.0, abs=1e-9)
+        assert price == pytest.approx(1.0 / model[2])
+
+    def test_a_book_with_no_edge_in_it_says_nothing_is_worth_backing(
+        self, sealed_store: pd.DataFrame, registered_predictors: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Prices that are exactly the model's own opinion, with a margin on top, leave nothing.
+        That is the ordinary and reassuring answer, and it has to be sayable."""
+        model = sealed_store.loc[sealed_store["predictor"].eq(answers.HEADLINE_MODEL)]
+        fair = {
+            (str(row["home_club"]), str(row["away_club"])): (
+                1.0 / (row["prob_home"] * 1.05),
+                1.0 / (row["prob_draw"] * 1.05),
+                1.0 / (row["prob_away"] * 1.05),
+            )
+            for _, row in model.iterrows()
+        }
+        monkeypatch.setattr(answers, "_offered_odds", lambda: fair)
+
+        text = answers.value(pd.Timestamp("2026-08-28 12:00"))
+
+        assert "NOTHING WORTH BACKING" in text
+
+    def test_an_empty_odds_cache_is_said_rather_than_guessed_at(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """`data/raw/` is gitignored, so a fresh clone has no fixtures file at all. The likely
+        winner is still answerable without prices; the value half is not, and says so."""
+        text = answers.value(pd.Timestamp("2026-08-28 12:00"))
+
+        assert "NO PRICES TO COMPARE AGAINST" in text
+        assert "MOST LIKELY TO WIN" in text
+
+    def test_it_never_fetches_to_find_a_price(
+        self, sealed_store: pd.DataFrame, registered_predictors: None
+    ) -> None:
+        """A `/bet` that went to the network would be a chat command that hangs for thirty seconds.
+        The structural half of this claim is in `test_the_bot_is_read_only.py`; this is the half
+        that checks the cache lookup copes with there being no cache."""
+        assert answers._offered_odds() == {}

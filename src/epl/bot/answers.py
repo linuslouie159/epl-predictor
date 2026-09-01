@@ -53,6 +53,7 @@ import pandas as pd
 from epl import predictors
 from epl.bot import fires, render, watch
 from epl.clubs import ClubResolver
+from epl.ingest.fixtures import latest_fixtures_path, parse_fixtures
 from epl.ingest.football_data import match_table
 from epl.ledger import live as store
 from epl.ledger import scoreboard
@@ -93,6 +94,25 @@ MOVEMENT_POINTS = 4
 #: How many Fixtures :func:`disagreements` reports. Three, because the message is read on a phone
 #: and a ranked list whose tail is noise teaches its reader to stop at the top anyway.
 DISAGREEMENTS_SHOWN = 3
+
+#: The expected return, per unit staked, below which :func:`value` says nothing about an Outcome.
+#:
+#: Five percent, and it is a noise floor rather than a target. The model's edge over the offered
+#: price is the difference between two numbers that are each uncertain, and the smaller of the two
+#: uncertainties is not small: over the Evaluation Window this model is measured **worse** than the
+#: market it would be betting against (0.19752 RPS against 0.19362). An edge of one or two percent
+#: is comfortably inside that gap and reporting it would be reporting the model's error as a
+#: finding.
+VALUE_THRESHOLD = 0.05
+
+#: What the Evaluation Window says about the two Predictors a value bet is a disagreement between.
+#:
+#: Carried as data rather than as prose so it cannot drift from the board, and quoted in every
+#: message :func:`value` produces. This is the single most important number in that message: the
+#: market outscores the model over 7,980 Fixtures, so an Outcome where the model thinks the price is
+#: wrong is the model contradicting the better-scoring of the two.
+MARKET_RPS = 0.19362
+MODEL_RPS = 0.19752
 
 #: The list marker. An ASCII hyphen rather than a bullet character: the repository owner asked for
 #: no emoji, and a bullet is not an emoji but renders as a box on the devices that lack the glyph,
@@ -261,6 +281,206 @@ def disagreements(prediction_round: str | None = None) -> str:
         "measures. A gap is where the model would take the other side, not where it is right."
     )
     return render.document(parts)
+
+
+def value(now: pd.Timestamp) -> str:
+    """Which Outcome the model thinks is mispriced, and which side it simply expects to win.
+
+    **Two questions, and they are not the same one.** "Who will win?" is answered by the model's
+    highest probability and is usually a favourite whose price reflects exactly that. "What is worth
+    backing?" is answered by the model's probability against the price actually on offer, and the
+    answer is usually somewhere else entirely — often a longshot. Reporting one under the other's
+    name is the single easiest way for this message to mislead, so it reports both, separately, and
+    says which is which.
+
+    **Against the offered price, not against the Market Line.** The stored Market Line has had the
+    bookmaker's margin removed (ADR 0001), which is right for scoring two Predictors against each
+    other and wrong here: nobody can bet at a vig-free price. So the expected return is computed
+    from the raw decimal odds in the rolling fixtures file, and already carries the ~5% overround
+    (`python -m epl.benchmarks overround`). Using the vig-removed number would overstate every edge
+    on this board by about that much.
+
+    **What the message must always carry, and does.** Over the Evaluation Window's 7,980 Fixtures
+    the market scores :data:`MARKET_RPS` and this model scores :data:`MODEL_RPS` — the market is
+    *better*. Every line below is therefore the model disagreeing with something that has outscored
+    it over twenty-one Seasons, which is a fact about the model's opinion and not a demonstrated
+    edge. That sentence is not a disclaimer bolted on: it is the most informative thing in the
+    message, and :data:`VALUE_THRESHOLD` exists because an edge smaller than that gap is noise.
+    """
+    upcoming = _upcoming(now)
+    if upcoming.empty:
+        return _nothing_upcoming(now)
+
+    offered = _offered_odds()
+    priced = [
+        (row, best)
+        for _, row in upcoming.iterrows()
+        if (best := _best_return(row, offered)) is not None
+    ]
+    worth_it = sorted(
+        (pair for pair in priced if pair[1][1] >= VALUE_THRESHOLD),
+        key=lambda pair: pair[1][1],
+        reverse=True,
+    )
+
+    return render.document(
+        [
+            "WHO WINS, AND WHAT IS WORTH BACKING",
+            _likeliest(upcoming),
+            _value_section(worth_it, priced, offered),
+            f"The bookmakers score better than this model over the {len(EVALUATION_WINDOW)} "
+            f"Seasons it has been measured on - {MARKET_RPS:.4f} against {MODEL_RPS:.4f}, lower "
+            "being better. So everything above is the model disagreeing with something that has "
+            "beaten it, which is its opinion rather than an edge it has been shown to have.",
+            "Returns are worked against the market-average odds in the fixtures file, so the "
+            "bookmaker's margin is already in them. They are what the model's numbers imply, not "
+            "what anyone has won.",
+        ]
+    )
+
+
+def _likeliest(upcoming: pd.DataFrame) -> str:
+    """The Fixtures the model is most confident about, and whether the market agrees.
+
+    Confidence and value point in opposite directions almost by construction — a side the model
+    makes a heavy favourite is a side the market has priced as one — so this section exists to be
+    read *against* the one below it rather than beside it.
+    """
+    ranked: list[tuple[pd.Series, int, int, bool]] = []
+    for _, row in upcoming.iterrows():
+        model = render.percentages(*_model(row))
+        pick = max(range(3), key=lambda index: model[index])
+        agrees = _has_market(row) and pick == max(
+            range(3), key=lambda index: render.percentages(*_market(row))[index]
+        )
+        ranked.append((row, pick, model[pick], agrees))
+    ranked.sort(key=lambda entry: entry[2], reverse=True)
+
+    lines: list[str] = []
+    for row, pick, confidence, agrees in ranked[:DISAGREEMENTS_SHOWN]:
+        lines.append(f"{render.short(row['home_club'])} v {render.short(row['away_club'])}")
+        # Whether the bookmakers pick the same side is the useful half here. The model being sure
+        # is worth much less on its own than the model and the market being sure together, and a
+        # reader deciding what to back needs to be able to see which of the two they have.
+        verdict = "market agrees" if agrees else "market disagrees"
+        lines.append(f"       {_outcome_name(row, pick, short=True)} {confidence}%  ({verdict})")
+    return render.document(["MOST LIKELY TO WIN", render.block(lines)])
+
+
+def _value_section(
+    worth_it: list[tuple[pd.Series, tuple[int, float, float]]],
+    priced: list[tuple[pd.Series, tuple[int, float, float]]],
+    offered: dict[tuple[str, str], tuple[float, float, float]],
+) -> str:
+    """The mispriced Outcomes, or a plain statement that there are none."""
+    if not offered:
+        return render.document(
+            [
+                "NO PRICES TO COMPARE AGAINST",
+                "The cached fixtures file carries no odds for these Fixtures, so nothing here can "
+                "be priced. It is refreshed by the loop's own fires, not by this bot.",
+            ]
+        )
+    if not priced:
+        return render.document(
+            [
+                "NO PRICES TO COMPARE AGAINST",
+                "None of the upcoming Fixtures appears in the cached fixtures file with a "
+                "price on it.",
+            ]
+        )
+    if not worth_it:
+        return render.document(
+            [
+                "NOTHING WORTH BACKING",
+                f"No Outcome clears {VALUE_THRESHOLD:.0%} expected return against the offered "
+                "price. That is the ordinary answer and the reassuring one: it means the model and "
+                "the bookmakers are reading these matches the same way.",
+            ]
+        )
+
+    lines: list[str] = []
+    for row, (index, expected, price) in worth_it[:DISAGREEMENTS_SHOWN]:
+        lines.append(f"{render.short(row['home_club'])} v {render.short(row['away_club'])}")
+        lines.append(f"       {_outcome_name(row, index, short=True)} at {price:.2f}")
+        # The price's own implied probability rather than the stored Market Line's, so the three
+        # numbers on this line are all about the same thing: the price above them. The Market Line
+        # has had the margin taken out and would be a percentage point or so lower, which is a
+        # distinction worth not making in the middle of a betting message.
+        lines.append(
+            f"       model {render.percentages(*_model(row))[index]}%"
+            f"  price {round(100 / price)}%"
+            f"  returns {expected:+.0%}"
+        )
+    tail = (
+        f"{len(worth_it)} Outcomes clear {VALUE_THRESHOLD:.0%}; the {DISAGREEMENTS_SHOWN} best are "
+        "above. A round where most of the card looks like value is a round where the model simply "
+        "disagrees with the book, which is worth reading as a warning rather than as an "
+        "opportunity."
+        if len(worth_it) > DISAGREEMENTS_SHOWN
+        else ""
+    )
+    return render.document(["WHERE THE MODEL SEES VALUE", render.block(lines), tail])
+
+
+def _best_return(
+    row: pd.Series, offered: dict[tuple[str, str], tuple[float, float, float]]
+) -> tuple[int, float, float] | None:
+    """The Outcome of this Fixture with the best expected return, and what that return is.
+
+    ``(index, expected return per unit staked, the decimal price)``, or ``None`` when this Fixture
+    has no price. The arithmetic is the whole feature and is one line: a stake returns ``price``
+    when the Outcome lands and nothing when it does not, so its expected value is
+    ``probability * price - 1``. Positive means the model thinks the price is too long.
+    """
+    prices = offered.get((str(row["home_club"]), str(row["away_club"])))
+    if prices is None or any(price is None or price <= 1.0 for price in prices):
+        return None
+    model = _model(row)
+    returns = [model[index] * prices[index] - 1.0 for index in range(3)]
+    best = max(range(3), key=lambda index: returns[index])
+    return best, returns[best], prices[best]
+
+
+def _outcome_name(row: pd.Series, index: int, *, short: bool = False) -> str:
+    """An Outcome named after the Club it wins for, because "away win" is not what a reader
+    is looking for."""
+    name = render.short if short else render.full
+    return [f"{name(row['home_club'])} win", "Draw", f"{name(row['away_club'])} win"][index]
+
+
+def _offered_odds() -> dict[tuple[str, str], tuple[float, float, float]]:
+    """The decimal prices in the most recently cached fixtures file, keyed by the two Clubs.
+
+    Read from the cache and never fetched — this is a bot, and a `/bet` that went to the network
+    would be a chat command that hangs (`tests/bot/test_the_bot_is_read_only.py`). The file is
+    refreshed by the loop's own fires, so these are the prices as of the last one.
+
+    An empty mapping when the cache holds nothing, which is an ordinary state rather than an error:
+    `data/raw/` is gitignored, so a fresh clone has no fixtures file at all.
+    """
+    path = latest_fixtures_path()
+    if path is None:
+        return {}
+    try:
+        rolling = parse_fixtures(path)
+    except Exception:  # pragma: no cover - a malformed cache must not take the bot down
+        return {}
+    return {
+        (str(row["home_club"]), str(row["away_club"])): (
+            _price(row["prematch_odds_home"]),
+            _price(row["prematch_odds_draw"]),
+            _price(row["prematch_odds_away"]),
+        )
+        for _, row in rolling.iterrows()
+    }
+
+
+def _price(offered: object) -> float:
+    """One decimal price, or 0.0 where the book carried none for that Outcome."""
+    if not isinstance(offered, (int, float)) or pd.isna(offered):
+        return 0.0
+    return float(offered)
 
 
 def for_club(argument: str, now: pd.Timestamp) -> str:
@@ -1080,8 +1300,11 @@ __all__ = [
     "HEADLINE_MODEL",
     "MARK",
     "MARKET",
+    "MARKET_RPS",
+    "MODEL_RPS",
     "MOVEMENT_POINTS",
     "TAIL_LINES",
+    "VALUE_THRESHOLD",
     "disagreements",
     "evaluation_board",
     "explain",
@@ -1097,4 +1320,5 @@ __all__ = [
     "round_digest",
     "scored_announcement",
     "sealed_announcement",
+    "value",
 ]

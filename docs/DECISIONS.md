@@ -1923,6 +1923,39 @@ the model and the Market Line are furthest apart. The whole scoreboard is an arg
 the model can keep up with the market, and this is where it is currently saying something different.
 `/board` survives unchanged and still refuses on the Pi, which is its correct answer.
 
+### `/bet`, and why the honest version of it is mostly a warning
+
+The request was "tell me which team to bet on". It contains two questions that a reader arrives
+believing are one, and the useful thing the command does is refuse to merge them.
+
+*Which side wins* is the model's highest probability. It is nearly always a favourite, and the
+market has priced it as one, so acting on it returns roughly the margin the book takes.
+
+*What is worth backing* is the model's probability against the price actually offered, which is a
+different question with a different answer — usually a different Fixture, and often a longshot. The
+expected return is one line of arithmetic: a stake pays the price when the Outcome lands and nothing
+otherwise, so its expected value is `probability * price - 1`.
+
+Two decisions inside that made it honest rather than flattering.
+
+**It prices against the raw odds, not the Market Line.** The stored Market Line is vig-removed,
+which is right for scoring two Predictors against each other (ADR 0001) and wrong here: nobody can
+bet at a vig-free price. Working the return against it would have added the whole overround — about
+five percentage points — to every edge on the board. `epl/benchmarks/vig.py` anticipated exactly
+this, noting that the choice of removal method "stops being immaterial the moment value betting is
+explored rather than only benchmarking".
+
+**Every message carries the finding that the market beats the model.** Over the Evaluation Window
+the Market Line scores 0.19362 and Dixon-Coles 0.19752. So each line `/bet` prints is the model
+disagreeing with something that has outscored it over 7,980 Fixtures. That is not a disclaimer
+bolted onto the feature; it is the most informative thing in the message, and it is why
+`VALUE_THRESHOLD` is 5% — an edge smaller than the gap between those two numbers is the model's own
+error being reported as a finding. `MARKET_RPS` and `MODEL_RPS` are constants so they cannot drift
+away from the board, and a test asserts the market's is the lower of the two.
+
+A round in which most of the card looks like value says so in the message, and says it is a reason
+to distrust the model rather than to bet more.
+
 ## Open risks
 
 1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.

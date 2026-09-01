@@ -269,6 +269,16 @@ Do not "fix" these without reading the linked ADR first:
   under every Fixture, which is what made it unreadable. The detail moved rather than went:
   `/next` and `/club` list every other Predictor that spoke beneath the model and the market, and
   the digest names them all in a line. Do not put the table back.
+- **`/bet` answers two questions and keeps them apart, and the caveat in it is the point.** "Which
+  side wins" is the model's highest probability and is nearly always a favourite the market has
+  priced as one; "what is worth backing" is the model's probability against the price on offer, and
+  is nearly always a different Fixture and often a longshot. Expected return is worked against the
+  **raw decimal odds** in the cached rolling file, not against the Market Line, because the Market
+  Line has had the margin removed (ADR 0001) and nobody can bet at a vig-free price — using it would
+  overstate every edge by the overround. Every such message carries `MARKET_RPS` and `MODEL_RPS`,
+  because over the Evaluation Window **the market outscores this model** (0.19362 against 0.19752),
+  so every value line is the model contradicting the better-scoring of the two. Do not trim that
+  sentence for length, and do not describe the output as an edge.
 - **`src/epl/v2/` is a package nothing imports, and that is its whole specification.** Three
   deferred features written down instead of built (decision 12): prose, named constants, no
   functions and no classes. It is Python rather than Markdown so that "the pipeline does not import
@@ -1018,7 +1028,7 @@ python -m epl.live prematch --dry-run --no-commit   # the same, writing nothing
 deploy/run_live.sh seal --push # the same, in the container the Pi's crontab fires (deploy/README.md)
 python -m epl.bot check        # what the bot would say about the schedule, sending nothing
 python -m epl.bot answer /week # print one command's reply to the terminal, sending nothing
-python -m epl.bot serve        # poll Telegram: /next /week /disagree /club /results /record ...
+python -m epl.bot serve        # poll Telegram: /next /week /bet /disagree /club /results ...
 python -m epl.bot notify seal  # what deploy/run_live.sh calls after every fire; always exits 0
 pytest                         # add --run-network to also hit football-data.co.uk
 ```

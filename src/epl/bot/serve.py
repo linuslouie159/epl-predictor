@@ -97,6 +97,11 @@ COMMANDS: tuple[Command, ...] = (
         lambda argument, now: answers.round_digest(argument or None),
     ),
     Command(
+        "bet",
+        "Who wins, and what to back",
+        lambda argument, now: answers.value(now),
+    ),
+    Command(
         "disagree",
         "Model against the bookmakers",
         lambda argument, now: answers.disagreements(argument or None),
@@ -159,6 +164,8 @@ ALIASES: dict[str, str] = {
     "round": "week",
     "live": "record",
     "commands": "help",
+    # `/value` is what this answer is actually about, and `/bet` is what somebody reaches for.
+    "value": "bet",
 }
 
 

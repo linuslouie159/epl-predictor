@@ -185,8 +185,8 @@ class TestNothingHereCanWriteAPrediction:
         from epl.bot import serve
 
         assert {command.name for command in serve.COMMANDS} == {
-            "next", "week", "disagree", "club", "results", "record", "board", "explain",
-            "health", "help",
+            "next", "week", "bet", "disagree", "club", "results", "record", "board",
+            "explain", "health", "help",
         }
         # The aliases are the same claim from the other side: they may only ever point at a
         # command in the table above, so a verb cannot be reached by a second spelling either.
