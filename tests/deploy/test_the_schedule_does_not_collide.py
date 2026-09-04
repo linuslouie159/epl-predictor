@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from itertools import combinations
 
+import pandas as pd
 import pytest
 
 from epl.paths import project_root
@@ -59,7 +60,13 @@ def test_the_crontab_parses_into_the_four_lines_it_documents(
 ) -> None:
     """A guard on the parser rather than on the schedule: a parse that silently found nothing would
     make every collision check below pass by vacuum."""
-    assert [line.subcommand for line in schedule] == ["score", "seal", "seal", "prematch"]
+    assert [line.subcommand for line in schedule] == [
+        "score",
+        "seal",
+        "seal",
+        "seal",
+        "prematch",
+    ]
 
 
 def test_no_two_scheduled_fires_land_in_the_same_minute(schedule: tuple[CronLine, ...]) -> None:
@@ -135,3 +142,83 @@ def test_a_loop_fire_that_cannot_take_the_lock_is_a_failed_fire_and_not_a_silenc
         "the lock-timeout path no longer notifies before exiting, so the one fire nobody can "
         "afford to miss is the one fire the bot is never told about"
     )
+
+
+#: First kickoffs that have actually happened on a Premier League round's own anchor day, and what
+#: each one is here to prove. Measured over `data/processed/matches.csv`: 324 rounds carry kickoff
+#: times, 225 Fixtures kick off on the Tuesday or Friday they anchor to, and the earliest is 12:30.
+#:
+#: The two festive Tuesdays are the whole reason the 10:00 fire exists. Both are rounds this
+#: schedule would have lost outright before it had one, because a round's window shuts at its first
+#: kickoff (ADR 0005) and 16:00 and 18:30 are both past a 12:30 or 15:00 one.
+ANCHOR_DAY_KICKOFFS: tuple[tuple[str, str, str], ...] = (
+    ("2023-12-26", "12:30", "Boxing Day, a Tuesday: the earliest anchor-day kickoff on record"),
+    ("2021-12-28", "15:00", "a festive Tuesday afternoon"),
+    ("2022-12-27", "17:30", "late enough for 16:00, too early for the 18:30 retry"),
+    ("2020-06-19", "18:00", "the behind-closed-doors restart, sixteen rounds of these"),
+    ("2026-09-04", "20:00", "an ordinary Friday evening round"),
+)
+
+
+@pytest.mark.parametrize(("anchor", "kickoff", "why"), ANCHOR_DAY_KICKOFFS)
+def test_some_seal_fire_can_reach_every_first_kickoff_on_record(
+    schedule: tuple[CronLine, ...], anchor: str, kickoff: str, why: str
+) -> None:
+    """Every round the corpus has seen must have a fire inside its window, festive ones included.
+
+    The times come from `deploy/crontab` and the kickoffs from the match table, so this is the two
+    halves of "does it seal every week" checked against each other rather than either one alone.
+    A fire seals a round if it lands strictly before the first kickoff and at or after the As-Of
+    Instant, which is midnight at the start of the anchor day — so on the anchor day itself, any
+    fire earlier than the kickoff will do.
+
+    Before the 10:00 line existed, the first two of these failed.
+    """
+    first_kickoff = pd.Timestamp(f"{anchor} {kickoff}")
+    fires = [
+        pd.Timestamp(anchor) + pd.Timedelta(hours=hour, minutes=minute)
+        for line in schedule
+        if line.subcommand == "seal"
+        for hour in sorted(line.hours)
+        for minute in sorted(line.minutes)
+    ]
+    reaching = [f"{fire:%H:%M}" for fire in fires if fire < first_kickoff]
+
+    assert reaching, (
+        f"a round anchored to {anchor} whose first kickoff is {kickoff} ({why}) has no seal fire "
+        f"inside its window: the schedule fires at {[f'{fire:%H:%M}' for fire in fires]}, and all "
+        f"of them are at or after the kickoff, so the round would be refused and lost for good"
+    )
+
+
+def test_the_early_fire_is_the_conditional_one_and_the_others_are_not(
+    schedule: tuple[CronLine, ...],
+) -> None:
+    """Only the earliest seal fire may carry `--next-fire`, and it must name a later one.
+
+    The flag makes a fire stand aside when a later one will do the job, so putting it on the last
+    fire of the day would stand aside from the round entirely — the exact failure the flag exists
+    to prevent, spelt as a one-line crontab edit.
+    """
+    sealing = sorted(
+        (line for line in schedule if line.subcommand == "seal"),
+        key=lambda line: (min(line.hours), min(line.minutes)),
+    )
+    earliest, *rest = sealing
+
+    assert "--next-fire" in earliest.command, (
+        "the earliest seal fire no longer stands aside for the later ones, so every round would be "
+        "sealed at 10:00 on whatever odds the rolling file happened to hold"
+    )
+    assert all("--next-fire" not in line.command for line in rest), (
+        "a later seal fire carries --next-fire; if the fire it defers to does not exist or has "
+        "already run, the round is not sealed by anybody"
+    )
+    named = earliest.command.split("--next-fire", 1)[1].split()[0]
+    hour, minute = (int(part) for part in named.split(":"))
+    assert (hour, minute) > (min(earliest.hours), min(earliest.minutes)), (
+        f"the early fire defers to {named}, which is not after it"
+    )
+    assert any(
+        (hour, minute) == (min(line.hours), min(line.minutes)) for line in rest
+    ), f"the early fire defers to {named}, and no seal fire is scheduled then"
