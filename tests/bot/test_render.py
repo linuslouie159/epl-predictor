@@ -36,6 +36,12 @@ COMMANDS: tuple[str, ...] = tuple(f"/{command.name}" for command in serve.COMMAN
 #: answer with. Zone-aware, because that is what `epl.bot.fires.uk_now` hands the dispatcher.
 NOW = pd.Timestamp("2026-08-28T12:00:00", tz=fires.LOCAL_ZONE)
 
+#: A moment after the last Fixture of that round has been played, which is the state `/week` is in
+#: for three days of every week and renders a different message for. Swept as well as :data:`NOW`
+#: because the width and ASCII budgets are properties of a *message*, and this is a second message
+#: from the same command — the one that would otherwise be checked by nobody until a Monday.
+AFTER_THE_ROUND = pd.Timestamp("2026-08-31T12:00:00", tz=fires.LOCAL_ZONE)
+
 #: The one message exempt from the width budget, and why.
 #:
 #: :func:`epl.bot.answers.failure` quotes the loop's own output rather than summarising it, because
@@ -55,6 +61,7 @@ def every_message() -> dict[str, str]:
     messages = {
         command: serve.dispatch(command, now=NOW) or "" for command in COMMANDS
     }
+    messages["/week (round over)"] = serve.dispatch("/week", now=AFTER_THE_ROUND) or ""
     messages["/club arsenal"] = serve.dispatch("/club arsenal", now=NOW) or ""
     messages["/club nonsense"] = serve.dispatch("/club nonsense", now=NOW) or ""
     messages["sealed_announcement"] = answers.sealed_announcement()

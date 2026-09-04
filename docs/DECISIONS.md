@@ -2032,6 +2032,46 @@ the model and the Market Line are furthest apart. The whole scoreboard is an arg
 the model can keep up with the market, and this is where it is currently saying something different.
 `/board` survives unchanged and still refuses on the Pi, which is its correct answer.
 
+### A finished round is not the current one, and the digest could not tell them apart
+
+Reported from the reader's end: `/week` looked out of date. It was not — the round it showed was
+the newest one sealed, which is what it is for — but the newest sealed round is the *current* one
+only from Friday afternoon until Monday night, and for the three days after that the digest
+re-rendered a forecast for matches already played, with nothing in the message saying so. There is
+no bug here to find, which is exactly why it was worth fixing: a correct message that reads as a
+broken one is a broken message.
+
+`round_digest` now takes a clock. A round still under way gains one line naming it as the current
+one and when it finishes. A round whose last kickoff is more than `MATCH_LENGTH` past is replaced
+by two things a reader mid-week actually wants: **how it went**, and **what is next**.
+
+Three decisions inside that, none of them obvious:
+
+- **"Is it over" is decided from kickoffs and the clock, never from results in the corpus.** The
+  corpus only learns a result when `score` next runs, which on this schedule is the *following*
+  Tuesday or Friday morning — so waiting for results would call Sunday's finished round "current"
+  until Tuesday, which is most of the window this exists to fix. It also means there is a real gap
+  where the round is certainly over and certainly unscored; that gap gets a sentence rather than an
+  empty table.
+- **The next round's Fixtures come from the newest cached rolling file, and carry no numbers.**
+  `latest_fixtures_path` and `parse_fixtures` are readers and the bot still never fetches. Those
+  Fixtures are not sealed, so no Predictor has spoken about them — and the same file carries the
+  market's odds, which is precisely why they are not shown. A number in a forecast-shaped message
+  that no Predictor said and no ledger holds is the thing `epl.calibration`'s rule exists against,
+  arriving through a chat window instead of a scoreboard.
+- **A round asked for by name is rendered in full however old**, and so is one asked for with no
+  clock at all. The second is the announcement the loop sends at the moment of sealing, and telling
+  it that its own round is over would be a message contradicting the event that produced it.
+
+`epl.rounds.kickoff_instants` builds the kickoff from the rolling file's `date` and `time` rather
+than a fresh `+` at this call site: that helper places a Fixture with no recorded time at the start
+of its day, deliberately and in the safe direction, and a second spelling would lose that.
+
+The format sweep in `tests/bot/test_render.py` now renders `/week` at two moments rather than one.
+The width and ASCII budgets are properties of a *message*, and this is a second message from the
+same command — one that would otherwise have been checked by nobody until a Monday, on the one
+device where a too-long line is invisible.
+
 ### `/bet`, and why the honest version of it is mostly a warning
 
 The request was "tell me which team to bet on". It contains two questions that a reader arrives

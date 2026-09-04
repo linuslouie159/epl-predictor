@@ -58,7 +58,7 @@ from epl.ingest.football_data import match_table
 from epl.ledger import live as store
 from epl.ledger import scoreboard
 from epl.paths import processed_dir
-from epl.rounds import round_id
+from epl.rounds import kickoff_instants, round_id
 from epl.windows import EVALUATION_WINDOW, LIVE_SEASON, season_label
 
 #: How many lines of a failed run's output to quote. Enough to see the complaint, short of pasting
@@ -293,12 +293,12 @@ def _round_is_over(wanted: str, rows: pd.DataFrame, last: object, now: pd.Timest
     the model has not spoken about them; printing the market's odds beside them would put a number
     in a forecast-shaped message that no Predictor said and no ledger holds.
     """
-    parts = [f"ROUND OF {wanted} IS OVER", _how_it_went(wanted, rows, last, now)]
+    parts = [f"{_round_line(wanted).upper()} IS OVER", _how_it_went(rows, last)]
     parts += _what_is_next(wanted, now)
     return render.document(parts)
 
 
-def _how_it_went(wanted: str, rows: pd.DataFrame, last: object, now: pd.Timestamp) -> str:
+def _how_it_went(rows: pd.DataFrame, last: object) -> str:
     """The finished round's scorelines, or why they are not here yet.
 
     `score` runs on the next Tuesday or Friday morning, so there is a real window — most of Monday,
@@ -318,9 +318,9 @@ def _how_it_went(wanted: str, rows: pd.DataFrame, last: object, now: pd.Timestam
     )
     if played.empty:
         return (
-            f"The last match kicked off {render.relative(last, fires.wall_clock(now))} and the "
-            "results are not in the corpus yet - they arrive when the loop next scores, on its "
-            "own Tuesday or Friday morning. /results will have them then."
+            f"The last match kicked off on {pd.Timestamp(last):%A} and the results are not in "
+            "the corpus yet - they arrive when the loop next scores, on its own Tuesday or "
+            "Friday morning. /results will have them then."
         )
 
     lines, right = _scorelines(played.sort_values("kickoff"))
@@ -358,11 +358,11 @@ def _what_is_next(wanted: str, now: pd.Timestamp) -> list[str]:
                 f"{render.short(row['home_club'])} v {render.short(row['away_club'])}"
             )
     return [
-        f"NEXT UP - ROUND OF {when}",
+        f"NEXT UP - {_round_line(when).upper()}",
         render.block(lines),
-        f"Not sealed yet, so there is no forecast for these: the models run at 16:00 UK on "
-        f"{when} and a message goes out when they do. Read off the cached fixtures file, so "
-        "upstream may still add to it.",
+        f"Not sealed yet, so there is no forecast for these: the models run on "
+        f"{pd.Timestamp(when):%A %d %B} and a message goes out when they do. Read off the "
+        "cached fixtures file, so upstream may still add to it.",
     ]
 
 
@@ -381,6 +381,10 @@ def _cached_fixtures(now: pd.Timestamp) -> pd.DataFrame | None:
         return None
     if upcoming.empty:
         return upcoming
+    # The rolling file carries `date` and `time`; every other reader of a kickoff in this project
+    # gets it from `epl.rounds.kickoff_instants`, and a second way of pasting the two together is
+    # a second way of getting a Fixture with no recorded time wrong.
+    upcoming = upcoming.assign(kickoff=kickoff_instants(upcoming))
     return (
         upcoming.loc[upcoming["kickoff"] > fires.wall_clock(now)]
         .sort_values("kickoff")
@@ -394,15 +398,15 @@ def _how_current(wanted: str, last: object, now: pd.Timestamp | None) -> str:
     Without a clock it can only name the round, which is still more than the digest used to say.
     """
     if now is None:
-        return f"This is the round of {wanted}."
+        return f"This is the {_round_line(wanted).lower()}."
     moment = fires.wall_clock(now)
     finish = pd.Timestamp(last) + MATCH_LENGTH
     if moment < finish:
         return (
-            f"This is the round of {wanted}, the current one - it finishes "
+            f"This is the {_round_line(wanted).lower()}, the current one - it finishes "
             f"{render.relative(finish, moment)}."
         )
-    return f"This is the round of {wanted}."
+    return f"This is the {_round_line(wanted).lower()}."
 
 
 def next_match(now: pd.Timestamp) -> str:

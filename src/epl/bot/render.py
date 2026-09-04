@@ -328,7 +328,8 @@ def relative(when: object, now: object) -> str:
         return "in about an hour"
     if minutes < 60 * 24:
         return f"in about {round(minutes / 60)} hours"
-    return f"in {round(minutes / (60 * 24))} days"
+    days = round(minutes / (60 * 24))
+    return "in about a day" if days == 1 else f"in {days} days"
 
 
 def outcome_table(

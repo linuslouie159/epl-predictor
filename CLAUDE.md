@@ -290,6 +290,23 @@ Do not "fix" these without reading the linked ADR first:
   drops lines outside a `===== RUN` block by design. Writing the loop's own `RUN`/`END (exit 1)`
   format makes it a `Fire` the bot already knows how to announce, with no new parser and no new
   message. Do not give `prematch` the same treatment.
+- **`/week` shows a finished round differently, and that is the fix for a bot that looked stale.**
+  The digest used to render the newest sealed round forever, identically whether it was tonight's
+  or six days old — so on a Monday a reader saw a forecast for matches already played with nothing
+  saying they had been. `round_digest` now takes a clock: a round still under way is labelled the
+  current one, and a round whose last kickoff is more than `epl.bot.answers.MATCH_LENGTH` past is
+  replaced by how it went plus the next round's Fixtures. **A round asked for by name is always
+  rendered in full**, and so is one asked for with no clock — that second case is the announcement
+  sent at the moment of sealing, which must never be told its own round is over.
+- **The next round's Fixtures come from the newest *cached* rolling file and carry no numbers.**
+  `latest_fixtures_path` and `parse_fixtures` are readers, so the bot still never reaches upstream;
+  `epl.rounds.kickoff_instants` builds the kickoff, because a second way of pasting `date` and
+  `time` together is a second way of getting a Fixture with no recorded time wrong. **No
+  probabilities are shown against them**: they are not sealed, so no Predictor has spoken about
+  them, and the market's odds in that file would put a number nobody can point at in a ledger into
+  a forecast-shaped message. Whether the round is over is decided from kickoffs and the clock
+  rather than from results in the corpus — `score` runs the *next* Tuesday or Friday, so waiting
+  for results would call Sunday's finished round "current" until Tuesday morning.
 - **`/round` and `/live` still work and are not in the menu.** They are aliases for `/week` and
   `/record`, the commands that replaced them, kept for the reason `/start` is aliased at all: they
   are in one person's muscle memory and in this repository's own documentation, and a bot that

@@ -605,3 +605,82 @@ class TestTheSpreadBetweenThePredictors:
 
         assert "backed by" in text
         assert "of 2 models" in text
+
+
+class TestTheDigestSaysWhichRoundItIsShowing:
+    """`/week` after its round has finished, which is three days of every week.
+
+    Until this existed the digest rendered the newest sealed round forever, identically whether it
+    was tonight's or six days old — so a reader who opened it on a Monday saw a forecast for
+    matches already played, with nothing saying they had been. It read as a stale bot rather than
+    as a finished round, which is the report that started this.
+
+    Two halves. A round still under way is labelled as the current one; a round that is over is
+    replaced by how it went and what is next. The fixtures for "what is next" come from the newest
+    **cached** rolling file — the bot may not fetch (`test_the_bot_is_read_only.py`).
+    """
+
+    #: Inside the round the fixtures build: its last Fixture kicks off 2026-08-29 12:30.
+    DURING: ClassVar[pd.Timestamp] = pd.Timestamp("2026-08-28T21:00:00", tz=fires.LOCAL_ZONE)
+
+    #: Comfortably after that last Fixture has finished.
+    AFTER: ClassVar[pd.Timestamp] = pd.Timestamp("2026-08-31T12:00:00", tz=fires.LOCAL_ZONE)
+
+    def test_a_round_under_way_is_named_as_the_current_one(
+        self, sealed_store: pd.DataFrame, corpus: Path
+    ) -> None:
+        message = answers.round_digest(now=self.DURING)
+
+        assert "the current one" in message
+        assert "IS OVER" not in message
+
+    def test_a_finished_round_is_replaced_by_how_it_went(
+        self, sealed_store: pd.DataFrame, corpus: Path
+    ) -> None:
+        message = answers.round_digest(now=self.AFTER)
+
+        assert "IS OVER" in message
+        assert "NEXT UP" in message
+        # The forecast table is gone: quoting probabilities for played matches is what made the
+        # stale digest read as a live one.
+        assert "You will get a message about an hour before each kick-off." not in message
+
+    def test_a_round_asked_for_by_name_is_still_shown_however_old(
+        self, sealed_store: pd.DataFrame, corpus: Path
+    ) -> None:
+        """Somebody typing `/week 2026-08-28` wants that round, not a note that it finished."""
+        message = answers.round_digest("2026-08-28", now=self.AFTER)
+
+        assert "IS OVER" not in message
+        assert "Palace" in message
+
+    def test_without_a_clock_the_digest_is_unchanged(
+        self, sealed_store: pd.DataFrame, corpus: Path
+    ) -> None:
+        """The announcement sent at the moment of sealing passes no clock, and must not be told
+        that the round it is announcing is over."""
+        message = answers.round_digest()
+
+        assert "IS OVER" not in message
+        assert "the current one" not in message
+
+    def test_results_that_have_not_been_ingested_yet_are_said_rather_than_shown_empty(
+        self, sealed_store: pd.DataFrame, project_root: Path
+    ) -> None:
+        """`score` runs the next Tuesday or Friday morning, so a round is over and unscored for
+        most of a day. That gap gets a sentence, not an empty table."""
+        message = answers.round_digest(now=self.AFTER)
+
+        assert "IS OVER" in message
+        assert "not in the corpus yet" in message or "match table is not on this machine" in message
+
+    def test_an_empty_fixtures_cache_is_said_rather_than_guessed_at(
+        self, sealed_store: pd.DataFrame, corpus: Path
+    ) -> None:
+        """`data/raw/` is gitignored, so a fresh clone has no rolling file at all. That is an
+        ordinary state and gets an ordinary sentence."""
+        assert answers._cached_fixtures(self.AFTER) is None
+
+        message = answers.round_digest(now=self.AFTER)
+
+        assert "No copy of the fixtures file has been cached" in message
