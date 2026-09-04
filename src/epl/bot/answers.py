@@ -392,21 +392,26 @@ def _cached_fixtures(now: pd.Timestamp) -> pd.DataFrame | None:
     )
 
 
+def _uncapitalised(sentence_start: str) -> str:
+    """`Round of Friday 04 September` mid-sentence, without flattening the date with `.lower()`."""
+    return sentence_start[:1].lower() + sentence_start[1:]
+
+
 def _how_current(wanted: str, last: object, now: pd.Timestamp | None) -> str:
     """Which round this is and whether it is the live one, in one line at the foot of the digest.
 
     Without a clock it can only name the round, which is still more than the digest used to say.
     """
     if now is None:
-        return f"This is the {_round_line(wanted).lower()}."
+        return f"This is the {_uncapitalised(_round_line(wanted))}."
     moment = fires.wall_clock(now)
     finish = pd.Timestamp(last) + MATCH_LENGTH
     if moment < finish:
         return (
-            f"This is the {_round_line(wanted).lower()}, the current one - it finishes "
+            f"This is the {_uncapitalised(_round_line(wanted))}, the current one - it finishes "
             f"{render.relative(finish, moment)}."
         )
-    return f"This is the {_round_line(wanted).lower()}."
+    return f"This is the {_uncapitalised(_round_line(wanted))}."
 
 
 def next_match(now: pd.Timestamp) -> str:
