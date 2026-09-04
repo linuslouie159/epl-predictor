@@ -60,7 +60,7 @@ CRON_TZ=Europe/London
 # run_live.sh now gives the loop priority outright, so this shift is not what makes the schedule
 # correct — it is what keeps the loop from ever having to wait. Both, because the lock is the fix
 # and a schedule that does not collide is the reason the fix stays cold. Five minutes moves nothing
-# else: 20:00 is caught at 18:35, 17:30 at 16:35, 12:30 at 11:35, a midweek 19:45 at 18:35.
+# else: 20:00 is caught at 19:05, 17:30 at 16:35, 12:30 at 11:35, a midweek 19:45 at 18:35.
 # The store's own dedupe absorbs a second sighting (epl.ledger.readings.already_read).
 #
 # The hours bound the cost rather than the correctness. The earliest Premier League kickoff is

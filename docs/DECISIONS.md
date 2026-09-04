@@ -1917,7 +1917,7 @@ Three changes, and the reason there are three:
   `Fire.failed` already reports it and `epl.bot.notify` already announces it. The prematch
   stand-down stays a bare line, because it genuinely is not a fire and nothing was lost.
 - **`deploy/crontab` moved `prematch` to `5,35`**, so the two schedules never contend and the wait
-  path stays cold. Five minutes changes nothing else — 20:00 is caught at 18:35, 12:30 at 11:35.
+  path stays cold. Five minutes changes nothing else — 20:00 is caught at 19:05, 12:30 at 11:35.
 
 Either the lock or the shift would have been enough on its own. Both, because they fail
 independently: a future line added on a shared minute is caught by the lock, and a future edit to
