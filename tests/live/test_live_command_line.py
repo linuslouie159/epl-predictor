@@ -39,6 +39,32 @@ ROLLING_CSV = "\r\n".join(
 )
 
 
+#: The festive shape, and the reason `--next-fire` exists: a Fixture kicking off on its own anchor
+#: day, in the afternoon. Modelled on 2021-12-28, a Tuesday whose round kicked off at 15:00 — the
+#: window shuts then, so a 16:00 fire is already too late and an 18:30 retry is later still.
+#:
+#: Deliberately a second file rather than a tweak to :data:`ROLLING_CSV`: that one's Fixtures are
+#: the Saturday, which is every ordinary round, and the whole question here is what happens when
+#: they are not.
+SAME_DAY_ROLLING_CSV = "\r\n".join(
+    [
+        "Div,Date,Time,HomeTeam,AwayTeam,AvgH,AvgD,AvgA",
+        "E0,28/08/2026,15:00,Arsenal,Everton,1.55,4.20,5.50",
+        "E0,28/08/2026,17:30,Man City,Chelsea,1.85,3.70,4.10",
+        "",
+    ]
+)
+
+
+@pytest.fixture
+def same_day_rolling(project_root: Path) -> Path:
+    """A cached rolling file holding a round that kicks off on its own anchor day."""
+    fixtures_dir().mkdir(parents=True, exist_ok=True)
+    path = fixtures_dir() / "fixtures_20260828T120000Z.csv"
+    path.write_bytes(SAME_DAY_ROLLING_CSV.encode("utf-8"))
+    return path
+
+
 @pytest.fixture
 def stopped_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "clock", lambda: INSIDE_THE_WINDOW)
@@ -185,6 +211,88 @@ class TestSeal:
         assert "silent (cover none of this round)" in printed
         assert "lawrenson" in printed
         assert "ceiling_line" in printed
+
+
+class TestTheEarlyFireStandsAsideUnlessTheRoundWouldBeLost:
+    """`--next-fire`, which exists because the window shuts at the first kickoff.
+
+    16:00 is after the odds sample and before an evening kickoff, which is every ordinary round and
+    is not every round. Measured over the 324 Premier League rounds carrying kickoff times, two
+    would have been lost outright — 2021-12-28 (15:00) and 2023-12-26 (12:30), both festive
+    Tuesdays — because both scheduled fires are past a round whose window has already shut.
+
+    So a third fire runs at 10:00 and is told when the next one is. It seals only when waiting
+    would lose the round, which keeps every ordinary round sealed at 16:00 as before rather than
+    six hours earlier.
+
+    Two rolling files, because the two shapes are the whole point. `rolling` is an ordinary round
+    played the Saturday after its Friday anchor, and no time of day on the Friday can shut its
+    window. `same_day_rolling` kicks off at 15:00 on the anchor day itself, which is the shape that
+    was being lost.
+    """
+
+    def test_it_stands_aside_when_a_later_fire_will_still_find_the_round_open(
+        self, corpus: Path, rolling: Path, repo: Path, stopped_clock: None,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The ordinary case, and the one that must not change: nothing is sealed early."""
+        assert cli.main(["seal", "--cached", "--next-fire", "14:45"]) == 0
+
+        assert not store.path("2026-08-28").exists()
+        assert cli.DEFERRED_TO_A_LATER_FIRE in capsys.readouterr().out
+
+    def test_it_seals_when_the_round_would_have_kicked_off_by_then(
+        self, corpus: Path, same_day_rolling: Path, repo: Path, stopped_clock: None,
+    ) -> None:
+        """The festive case. Without this the round is refused by every remaining fire."""
+        assert cli.main(["seal", "--cached", "--next-fire", "16:00"]) == 0
+
+        assert store.path("2026-08-28").exists()
+        assert schema.audit(store.read()) == []
+
+    def test_the_same_festive_round_is_left_alone_by_a_fire_that_is_still_in_time(
+        self, corpus: Path, same_day_rolling: Path, repo: Path, stopped_clock: None,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The boundary, on the round that needs it: 14:45 is before the 15:00 kickoff, so a fire
+        then will still find the window open and this one must not pre-empt it."""
+        assert cli.main(["seal", "--cached", "--next-fire", "14:45"]) == 0
+
+        assert not store.path("2026-08-28").exists()
+        assert cli.DEFERRED_TO_A_LATER_FIRE in capsys.readouterr().out
+
+    def test_a_named_fire_that_has_already_passed_seals_rather_than_defers(
+        self, corpus: Path, rolling: Path, repo: Path, stopped_clock: None,
+    ) -> None:
+        """A misconfigured crontab must fail towards sealing.
+
+        Deferring to a fire that has already run loses the round; sealing one the later fire would
+        also have sealed costs nothing, because sealing is idempotent inside a round.
+        """
+        assert cli.main(["seal", "--cached", "--next-fire", "09:00"]) == 0
+
+        assert store.path("2026-08-28").exists()
+
+    def test_standing_aside_is_not_one_of_the_two_silences_open_risk_7_counts(self) -> None:
+        """It must not be mistaken for a fire that *could not* seal.
+
+        `epl.bot.fires.SILENCES` is the population `stale_upstream` reasons about — fires that ran,
+        exited 0 and sealed nothing because the rolling file could not tell them otherwise. A fire
+        that read the round and chose to wait is not evidence about upstream at all.
+        """
+        from epl.bot import fires
+
+        assert cli.DEFERRED_TO_A_LATER_FIRE not in fires.SILENCES
+        assert all(
+            silence not in cli.DEFERRED_TO_A_LATER_FIRE for silence in fires.SILENCES
+        )
+
+    @pytest.mark.parametrize("given", ["16", "25:00", "16:61", "teatime", "16:00:00"])
+    def test_a_time_that_is_not_a_time_is_refused_at_the_command_line(self, given: str) -> None:
+        """Refused rather than coerced: a `--next-fire` nobody can parse would otherwise become a
+        fire time nobody intended, on the one flag that decides whether a round is sealed today."""
+        with pytest.raises(SystemExit):
+            cli.main(["seal", "--cached", "--next-fire", given])
 
 
 class TestScore:

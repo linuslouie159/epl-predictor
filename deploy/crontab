@@ -17,6 +17,24 @@
 # the whole point. The run that seals a round is exactly the run that may have been unable to
 # reach the network, and a sealed round that never left this Pi is not evidence of anything.
 #
+# WHY THREE TIMES, AND WHY THE FIRST ONE IS CONDITIONAL. 16:00 is after the odds sample and before
+# a 19:45 or 20:00 first kickoff — which is every ordinary round and is not every round. **The
+# window shuts at the first kickoff, and the festive programme kicks off in the afternoon.**
+# Measured over the 324 Premier League rounds that carry kickoff times: two would have been lost
+# outright, 2021-12-28 (15:00) and 2023-12-26 (12:30), both Tuesdays, because 16:00 and 18:30 are
+# both past the window. Sixteen more had a first kickoff before 18:30, so the retry could not have
+# helped them either. 2026-12-29 is a Tuesday.
+#
+# So 10:00 fires with `--next-fire 16:00`, which tells the loop when the next fire is and asks it
+# to seal now ONLY IF the round would not survive until then. On an ordinary round it reads the
+# rolling file, sees 16:00 is still inside the window, prints one line and stands aside — so
+# nothing is sealed early on odds that might be worse. On a festive Tuesday it seals.
+#
+# 10:00 rather than earlier because the earliest anchor-day kickoff ever recorded is 12:30, and
+# rather than later because that margin is the whole point. It is safe on the odds: every E0 row
+# in every rolling file this project has cached carried its Avg odds, including Fixtures three days
+# ahead, so odds arrive with the Fixture rather than on the afternoon of the anchor day.
+#
 # WHY score ON THE SAME DAYS. A Tuesday round is played Tuesday to Thursday and a Friday round
 # Friday to Monday, so each morning fire scores the round that has just finished, hours before the
 # next one is sealed. It ingests the Live Season and rebuilds the match table itself, so nothing
@@ -60,7 +78,7 @@ CRON_TZ=Europe/London
 # run_live.sh now gives the loop priority outright, so this shift is not what makes the schedule
 # correct — it is what keeps the loop from ever having to wait. Both, because the lock is the fix
 # and a schedule that does not collide is the reason the fix stays cold. Five minutes moves nothing
-# else: 20:00 is caught at 18:35, 17:30 at 16:35, 12:30 at 11:35, a midweek 19:45 at 18:35.
+# else: 20:00 is caught at 19:05, 17:30 at 16:35, 12:30 at 11:35, a midweek 19:45 at 18:35.
 # The store's own dedupe absorbs a second sighting (epl.ledger.readings.already_read).
 #
 # The hours bound the cost rather than the correctness. The earliest Premier League kickoff is
@@ -84,6 +102,7 @@ CRON_TZ=Europe/London
 
 # m  h  dom mon dow  command
   0  6  *   *   2,5  __ROOT__/deploy/run_live.sh score
+  0 10  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push --next-fire 16:00
   0 16  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push
  30 18  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push
 5,35 11-22 *  *   *  __ROOT__/deploy/run_live.sh prematch --push

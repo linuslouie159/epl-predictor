@@ -56,6 +56,59 @@ from epl.paths import live_scoreboard_path
 from epl.predictors import Corpus
 from epl.windows import LIVE_SEASON, season_label
 
+#: What a `seal` fire prints when it read a round, found it in no danger, and deliberately did
+#: nothing. Named because it is a *third* kind of quiet exit 0 and must not be mistaken for the two
+#: in :mod:`epl.live.upcoming`: those two mean the loop *could not* seal, and are what open risk 7
+#: is a claim about. This one means it chose not to, because a later fire will do it on
+#: better-sampled odds. Deliberately not added to :data:`epl.bot.fires.SILENCES` for that reason.
+DEFERRED_TO_A_LATER_FIRE = "a later fire will seal this round; standing aside"
+
+
+def _time_of_day(given: str) -> pd.Timedelta:
+    """`HH:MM` as an offset into the day, for ``--next-fire``.
+
+    A time of day and never an instant, which is the whole reason this is safe to accept from the
+    command line where :func:`clock` is not. The day always comes from :func:`clock`, so no value
+    here can name a moment: the worst a wrong one can do is make an early fire seal a round the
+    later fire would have sealed, or stand aside from one it would not — a scheduling mistake in
+    both directions, and never a false As-Of Instant. :func:`epl.ledger.live.window` still governs
+    what may be written (ADR 0005).
+    """
+    try:
+        hour, minute = (int(part) for part in given.split(":", 1))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected a UK time of day as HH:MM; got {given!r}"
+        ) from None
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        raise argparse.ArgumentTypeError(f"{given!r} is not a time of day")
+    return pd.Timedelta(hours=hour, minutes=minute)
+
+
+def _moment(now: pd.Timestamp, time_of_day: pd.Timedelta) -> pd.Timestamp:
+    """That time of day on the day ``now`` falls in."""
+    return pd.Timestamp(now).normalize() + time_of_day
+
+
+def _survives_until(
+    chosen: upcoming.PredictionRound, now: pd.Timestamp, next_fire: pd.Timedelta
+) -> bool:
+    """Whether the next scheduled fire will still find this round inside its sealing window.
+
+    Asked of :func:`epl.ledger.live.window` rather than by comparing the kickoff here, so there is
+    one statement of what "inside the window" means and an early fire cannot come to disagree with
+    the store it is about to write to.
+
+    A named fire that has already passed is not a fire to defer to, so this is ``False`` and the
+    round is sealed now. That is the safe direction of a misconfigured crontab: sealing a round the
+    16:00 fire would also have sealed costs nothing, and standing aside for a fire that has already
+    run loses the round.
+    """
+    moment = _moment(now, next_fire)
+    if moment <= pd.Timestamp(now):
+        return False
+    return store.window(chosen.as_of, chosen.first_kickoff, moment) == store.SEALABLE
+
 
 def clock() -> pd.Timestamp:
     """Now, in UK local time — behind a function so a test can stop it.
@@ -105,6 +158,15 @@ def main(argv: list[str] | None = None) -> int:
         "--push",
         action="store_true",
         help="push the commit to its remote — what an unattended loop on another machine needs",
+    )
+    sealing.add_argument(
+        "--next-fire",
+        metavar="HH:MM",
+        type=_time_of_day,
+        help=(
+            "the UK time of the next scheduled fire; seal now only if this round would not "
+            "survive until then (a festive afternoon kickoff). Ordinary rounds are left alone"
+        ),
     )
 
     scoring = sub.add_parser("score", help="ingest results and score what has been sealed")
@@ -157,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
             supersede=args.supersede,
             commit=not args.no_commit,
             push=args.push,
+            next_fire=args.next_fire,
         )
     if args.command == "score":
         return _score(args.matches, ingest_first=not args.no_ingest)
@@ -228,6 +291,7 @@ def _seal(
     supersede: bool,
     commit: bool,
     push: bool,
+    next_fire: pd.Timedelta | None = None,
 ) -> int:
     """Seal the round that is open now, and say plainly through the exit code what happened.
 
@@ -255,6 +319,12 @@ def _seal(
         return 1
 
     print(chosen.describe())
+    if next_fire is not None and _survives_until(chosen, now, next_fire):
+        print(DEFERRED_TO_A_LATER_FIRE)
+        print(f"  the next fire is at {_moment(now, next_fire).isoformat()} and this round is "
+              f"sealable until {chosen.first_kickoff.isoformat()}")
+        return _push() if push else 0
+
     # Running the loop twice inside one round is expected of a schedule and is not a failure: the
     # round is already sealed, and the second run must leave it exactly as it was. Asked of the
     # store rather than caught from `seal`, so that "nothing to do" cannot come to mean "some other

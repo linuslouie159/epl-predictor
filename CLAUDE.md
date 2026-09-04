@@ -255,6 +255,24 @@ Do not "fix" these without reading the linked ADR first:
   against the loop's three a week, and almost every fire writes one line saying nothing kicks off
   within the hour; mixing them would bury the blocks a person opens `live_loop.log` to find. Same
   format, same parser (`epl.bot.fires.LOGS`), and `/health` reports the last fire of each.
+- **There are three `seal` fires a day, not two, and the earliest one usually does nothing.**
+  16:00 and 18:30 UK are right for every ordinary round and wrong for the festive programme, which
+  kicks off in the afternoon — and a round's window shuts at its first kickoff (ADR 0005). Measured
+  over the 324 Premier League rounds carrying kickoff times: **two would have been lost outright**,
+  2021-12-28 (15:00) and 2023-12-26 (12:30), both Tuesdays, with sixteen more whose first kickoff
+  was before the 18:30 retry. **2026-12-29 is a Tuesday.** So a 10:00 fire runs
+  `seal --push --next-fire 16:00`: it reads the round, asks
+  `epl.ledger.live.window` what the 16:00 fire will find, and seals *only* if the answer is that
+  the round will be gone. On an ordinary round it prints
+  `epl.live.__main__.DEFERRED_TO_A_LATER_FIRE` and stands aside, so nothing is sealed six hours
+  early on odds that might be worse. Do not drop the flag to "simplify" it, and do not put it on a
+  later fire — a fire that defers to one which has already run seals nothing at all.
+- **`--next-fire` takes a time of day and this is not the `--now` flag ADR 0005 forbids.** The
+  *day* always comes from `epl.live.__main__.clock`, so no value passed here can name a moment, and
+  `window` still governs what may be written. The worst a wrong one does is seal a round the later
+  fire would have sealed anyway, or stand aside from one it would not — a scheduling mistake, never
+  a false As-Of Instant. It is also a **UK** time and must not be zone-converted when the crontab's
+  hours are.
 - **`prematch` shares the loop's flock and is the side that yields, and that priority is a branch
   in `deploy/run_live.sh` rather than a sentence about it.** It commits too, so it shares the lock:
   two containers committing into one checkout is a corrupt index. But `flock -n` has no priority,
@@ -1053,6 +1071,7 @@ python -m epl.simulate project       # one Season Projection: title, Europe and 
 python -m epl.simulate validate      # project completed Seasons; where the real champion landed
 python -m epl.live upcoming    # what the rolling fixtures file holds, and what could be sealed
 python -m epl.live seal        # predict the upcoming round, write it to outputs/live/, commit it
+python -m epl.live seal --next-fire 16:00   # ...but only if a 16:00 fire would be too late
 python -m epl.live seal --push # and push it — what makes it evidence off the machine that made it
 python -m epl.live score       # ingest results, then score what has been sealed
 python -m epl.live prematch    # read whatever kicks off within the hour, afresh, after the seal

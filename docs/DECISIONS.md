@@ -1917,7 +1917,7 @@ Three changes, and the reason there are three:
   `Fire.failed` already reports it and `epl.bot.notify` already announces it. The prematch
   stand-down stays a bare line, because it genuinely is not a fire and nothing was lost.
 - **`deploy/crontab` moved `prematch` to `5,35`**, so the two schedules never contend and the wait
-  path stays cold. Five minutes changes nothing else — 20:00 is caught at 18:35, 12:30 at 11:35.
+  path stays cold. Five minutes changes nothing else — 20:00 is caught at 19:05, 12:30 at 11:35.
 
 Either the lock or the shift would have been enough on its own. Both, because they fail
 independently: a future line added on a shared minute is caught by the lock, and a future edit to
@@ -1929,6 +1929,57 @@ committed executable, does the window catch every kickoff. A collision is a prop
 and nothing looked at pairs. It parses the committed crontab (`tests/the_schedule.py`) rather than
 restating it, which is also what repaired the cadence test: that one built its fires from
 `range(0, 24 * 60, 30)`, so it would have gone on passing against a crontab saying anything at all.
+
+### The festive round, and a third seal fire that usually declines to fire
+
+Fixing the lock above answered "does the schedule get a fair chance at every round". It did not
+answer "does every round get a chance at all", and measuring that turned up a second, older defect
+that had nothing to do with `prematch`.
+
+A round's sealing window runs from its As-Of Instant to its **first kickoff** (ADR 0005). The two
+fires are at 16:00 and 18:30 UK, chosen against "a 19:45 or 20:00 first kickoff" — which is every
+ordinary round, and is not every round. Over the 324 Premier League rounds in the corpus that carry
+kickoff times, 225 Fixtures kick off on the very Tuesday or Friday they anchor to, and the earliest
+of those is **12:30**:
+
+| what | rounds | which |
+|---|---|---|
+| lost outright — 16:00 is already past the window | **2** | 2021-12-28 (15:00), 2023-12-26 (12:30) |
+| retry useless — 16:00 works, 18:30 does not | 16 | mostly the 2020/21 restart's 18:00 kickoffs, and 2022-12-27 |
+
+Both losses are festive Tuesdays, which is not a coincidence: it is the one week of the season the
+Premier League plays weekday afternoons. **2026-12-29 is a Tuesday.** The loop would have gone red
+in no way at all — `window` returns `KICKED_OFF`, `next_round` raises `NothingToSeal`, and that is
+a deliberate exit 0 (issue #19). One round a year or two, lost silently, on the schedule's own
+terms.
+
+**Why not simply fire earlier for everybody.** Because the 16:00 choice is load-bearing for the
+Market Line: fire before the odds are sampled and the round is sealed without them. So the third
+fire is at 10:00 and is *conditional* — `seal --push --next-fire 16:00` reads the round, asks
+`epl.ledger.live.window` what a fire at 16:00 today would find, and seals only if the answer is
+`KICKED_OFF`. On an ordinary round it stands aside; on a festive Tuesday it seals. Asked of
+`window` rather than by comparing the kickoff in the command line, so there is one statement of
+what "inside the window" means and the early fire cannot come to disagree with the store.
+
+**The odds premise was measured rather than assumed**, because the whole design rests on it. Across
+every rolling `fixtures.csv` this project has cached, **20 of 20 E0 rows carried their `Avg` odds**,
+including Fixtures three days ahead of kickoff. Odds arrive with the Fixture, not on the afternoon
+of the anchor day — so a 10:00 fire on a festive Tuesday is reading the same odds the 16:00 fire
+would have. What the early fire cannot beat is open risk 7: a rolling file upstream has not
+regenerated holds no round for anybody, at 10:00 or at 16:00.
+
+**`--next-fire` is a time of day, and that is what keeps it clear of ADR 0005.** The rule that there
+is no `--now` flag stands: the *day* comes from `clock()` and the window is still judged by
+`window`, so nothing passed on the command line can name a moment or seal outside the window. A
+wrong value is a scheduling mistake in one of two directions — sealing a round the later fire would
+also have sealed, which costs nothing because sealing is idempotent inside a round, or standing
+aside from one it would not, which is why a named fire that has *already passed* seals rather than
+defers. It is a UK time and is deliberately not converted when the crontab's hours are.
+
+`tests/deploy/test_the_schedule_does_not_collide.py` now checks the schedule against the kickoffs
+the corpus has actually seen: for each first kickoff on record, at least one seal fire in
+`deploy/crontab` must land inside the window. The two festive Tuesdays fail that test without the
+10:00 line, which is the only reason to believe it.
 
 ### The messages themselves, and the three ways formatting fails silently
 

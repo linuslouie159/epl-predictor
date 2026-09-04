@@ -358,15 +358,21 @@ time:
 ```bash
 cd ~/epl-predictor
 # UK -> this Pi's own zone. Check each against `date`; deliberately not automated.
-sed "s|__ROOT__|$PWD|g" deploy/crontab   | grep -v '^CRON_TZ'   | sed -e 's|^  0  6 |  0  1 |' -e 's|^  0 16 |  0 11 |' -e 's|^ 30 18 | 30 13 |'   > /tmp/epl.cron
+sed "s|__ROOT__|$PWD|g" deploy/crontab   | grep -v '^CRON_TZ'   | sed -e 's|^  0  6 |  0  1 |' -e 's|^  0 10 |  0  5 |' -e 's|^  0 16 |  0 11 |' -e 's|^ 30 18 | 30 13 |'   > /tmp/epl.cron
 crontab -l > /tmp/current 2>/dev/null; cat /tmp/epl.cron >> /tmp/current; crontab /tmp/current
 crontab -l | tail -8
 ```
 
-Those three substitutions are the `America/New_York` conversion the first Pi needed — 06:00/16:00/
-18:30 UK becoming 01:00/11:00/13:30 EDT. **Recompute them for any other zone** rather than copying,
-and record what you installed, because `deploy/crontab` in the repository stays zone-neutral and
-will not remind you.
+Those four substitutions are the `America/New_York` conversion the first Pi needed — 06:00/10:00/
+16:00/18:30 UK becoming 01:00/05:00/11:00/13:30 EDT. **Recompute them for any other zone** rather
+than copying, and record what you installed, because `deploy/crontab` in the repository stays
+zone-neutral and will not remind you.
+
+**The 10:00 line is the one whose hour actually matters.** The other two seal fires have hours of
+margin at both ends; that one exists to beat a 12:30 festive kickoff and has two and a half. It
+carries `--next-fire 16:00`, which is a **UK** time and is *not* converted — the loop judges it in
+UK time like everything else (`epl.ledger.live.uk_now`), so converting it would tell the loop the
+next fire is at a moment five hours from when it happens. Convert the cron hour; leave the flag.
 
 **The fourth line needs converting too and the `sed` above does not touch it.** `prematch` runs
 `5,35 11-22` — every half hour across the range that covers every Premier League kickoff — and an
