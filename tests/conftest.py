@@ -19,6 +19,7 @@ import pytest
 from epl import predictors
 from epl.clubs import ClubResolver
 from epl.predictors import Evidence
+from the_schedule import CronLine, crontab_lines
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -51,6 +52,12 @@ def data_dir() -> Path:
 def resolver() -> ClubResolver:
     """The Club resolver built from the tables shipped with the package."""
     return ClubResolver.load()
+
+
+@pytest.fixture
+def schedule() -> tuple[CronLine, ...]:
+    """What `deploy/crontab` actually schedules, parsed from the committed file."""
+    return crontab_lines()
 
 
 @pytest.fixture

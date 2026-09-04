@@ -251,15 +251,27 @@ Do not "fix" these without reading the linked ADR first:
   in a chat window is a fact about the chat window. They are derived by a rule (drop a droppable
   suffix) with a collision check that reverts to the canonical name, which is why Bristol City and
   Bristol Rovers keep their full names rather than both becoming "Bristol".
-- **`prematch` writes to its own log**, `deploy/logs/prematch.log`, and that is the only thing in
-  `deploy/run_live.sh` that varies by subcommand. It fires twenty-two times a day against the loop's
-  three a week, and almost every fire writes one line saying nothing kicks off within the hour;
-  mixing them would bury the blocks a person opens `live_loop.log` to find. Same format, same
-  parser (`epl.bot.fires.LOGS`), and `/health` reports the last fire of each.
-- **`prematch` shares the loop's flock, so a fire can stand down and skip a match.** Two containers
-  committing into one checkout is a corrupt index. A prematch fire landing inside a slow `score`
-  stands down quietly, which costs at most one of the two chances a Fixture gets at a message. That
-  is the right way round: sealing and scoring matter more than a card about one match.
+- **`prematch` writes to its own log**, `deploy/logs/prematch.log`. It fires twenty-two times a day
+  against the loop's three a week, and almost every fire writes one line saying nothing kicks off
+  within the hour; mixing them would bury the blocks a person opens `live_loop.log` to find. Same
+  format, same parser (`epl.bot.fires.LOGS`), and `/health` reports the last fire of each.
+- **`prematch` shares the loop's flock and is the side that yields, and that priority is a branch
+  in `deploy/run_live.sh` rather than a sentence about it.** It commits too, so it shares the lock:
+  two containers committing into one checkout is a corrupt index. But `flock -n` has no priority,
+  and stage 18 put `prematch` on the hour and the half hour — which is exactly when the two `seal`
+  fires land. On **2026-09-01 at 16:00 UK the seal is the one that stood down**, for a prematch fire
+  that had nothing to do and was finished three seconds later; the round survived only because the
+  18:30 retry won its own race, and a round that loses both is lost for good. So `prematch` now
+  takes `flock -n` and the loop takes `flock -w 600`, and the crontab moved to `:05` and `:35` so
+  the wait stays cold. Both, because either alone would do and they fail independently.
+  `tests/deploy/test_the_schedule_does_not_collide.py` pins the pair.
+- **A loop fire that cannot take the lock writes a failed block, where a prematch fire writes one
+  line.** The asymmetry is the same one. A prematch stand-down is genuinely not a fire and nothing
+  was lost; a `seal` that could not run is the failure this schedule can least afford, and the old
+  quiet `exit 0` reached nobody — cron says nothing about a zero exit, and `epl.bot.fires.parse`
+  drops lines outside a `===== RUN` block by design. Writing the loop's own `RUN`/`END (exit 1)`
+  format makes it a `Fire` the bot already knows how to announce, with no new parser and no new
+  message. Do not give `prematch` the same treatment.
 - **`/round` and `/live` still work and are not in the menu.** They are aliases for `/week` and
   `/record`, the commands that replaced them, kept for the reason `/start` is aliased at all: they
   are in one person's muscle memory and in this repository's own documentation, and a bot that
@@ -643,10 +655,14 @@ Six things about stage 18 worth knowing:
   one small file, no network, no fit — and exits 0 having printed one line. Only a fire with
   something due pays for a refresh of the Live Season, a rebuild of the match table and a run of
   every Predictor.
-- **The cadence and the window are one decision and are tested together.** Firing on the hour and
-  the half hour against a 45-to-75-minute window catches every Premier League kickoff, all of which
-  fall on a quarter-hour. `tests/live/test_prematch.py` checks that rather than trusting the
-  arithmetic, because a match that silently gets no message looks exactly like a quiet schedule.
+- **The cadence and the window are one decision and are tested together.** A fire at minute `m`
+  catches kickoffs in `(m+45, m+75]`, so any half-hourly cadence tiles the hour and every Premier
+  League kickoff, all of which fall on a quarter-hour, is inside exactly one fire's window.
+  `tests/live/test_prematch.py` checks that rather than trusting the arithmetic, because a match
+  that silently gets no message looks exactly like a quiet schedule — and it now reads the fire
+  minutes **out of `deploy/crontab`** rather than restating them, because the crontab moved to `:05`
+  and `:35` underneath a test that said `range(0, 24 * 60, 30)` and would have gone on passing
+  against any schedule at all.
 - **Formatting is tested because it fails silently on the one device this is read on.** Every
   message goes through `epl.bot.render`; no line inside a fixed-width block may exceed 44
   characters, every message must be pure ASCII, and three probabilities must sum to 100. All three
@@ -658,12 +674,16 @@ Six things about stage 18 worth knowing:
   file rather than from the sealed rows, because a ledger row carries no odds and because a card
   showing a fresh model against Friday's market would be the one comparison this must not make.
 
-**What is outstanding on stage 18 is deployment, exactly as it was for stage 17.** Everything is
-tested against a fake transport and no message has ever been sent to Telegram from this repository.
-What remains on the Pi is: `git pull`, install the fourth crontab line, and watch
-`deploy/logs/prematch.log` fill with `nothing kicks off within the hour` until a matchday. The first
-real proof is a fire that finds a Fixture due, writes `outputs/prematch/<date>.csv`, commits it and
-sends one card.
+**Stage 18 is deployed, and the deployment is what found the collision above.** The Pi pulled on
+1 Sep 2026, the fourth crontab line is installed, the bot container is up, and
+`deploy/logs/live_loop.log` carries `[epl.bot] notified 1 chat(s)` — so messages *are* being sent,
+and the sentence that used to stand here saying none ever had is retired. `deploy/logs/prematch.log`
+fills with `nothing kicks off within the hour` as designed, at about two seconds a fire.
+
+**What is still unproven is a fire that finds a Fixture due**: writes `outputs/prematch/<date>.csv`,
+commits it and sends one card. There has been no Premier League Fixture since the round of 29–31
+Aug, which was played before the prematch line existed. `outputs/prematch/` therefore holds nothing
+but its README, and that is the schedule waiting rather than the schedule failing.
 
 **Two pre-existing test failures are unrelated to this work and are worth knowing about.**
 `tests/live/test_live_command_line.py::TestScore::test_a_sealed_round_whose_fixtures_are_unplayed_scores_nothing_yet`
@@ -964,13 +984,14 @@ into something a person reads, with a message before every match.
 now has a live track record of exactly one round. Open risk 2 is closed; open risk 7 replaces it.
 See "Bringing it up on the Pi" in docs/DECISIONS.md before planning anything live.
 
-**The one thing outstanding on #20 is deployment, and it is deliberately not code.** Everything is
-tested against a fake transport and **no message has ever been sent to Telegram from this
-repository**. What remains is `deploy/SETUP.md` step 10 on the Pi: a token in `deploy/.env`, `python
--m epl.bot check` (which sends nothing), then `docker compose ... up -d bot`. The failures that only
-appear there are deployment's usual ones — a token with a trailing newline, a `.env` compose does
-not load, a container that cannot resolve `api.telegram.org` — and stage 16 is the precedent for
-expecting exactly one of them.
+**#20 is deployed.** `deploy/SETUP.md` step 10 was carried out on the Pi: the token is in
+`deploy/.env`, the bot container has been up since 1 Sep 2026, and `notify` reports
+`notified 1 chat(s)` after a fire that has something to say. The claim that no message had ever been
+sent from this repository was true when it was written and is not any more.
+
+**What the deployment found instead was a defect nothing had tested for**, and it is the reason to
+read the collision bullets above before touching `deploy/`: the fourth crontab line collides with
+both `seal` fires, and on 1 Sep it was the seal that lost. Fixed, tested and redeployed on 4 Sep.
 
 **The standing instruction to run `python -m epl.live upcoming` on a Friday is discharged**, and
 what replaces it is smaller: the schedule now asks twice a week and the answer is recorded in

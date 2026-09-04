@@ -369,12 +369,19 @@ and record what you installed, because `deploy/crontab` in the repository stays 
 will not remind you.
 
 **The fourth line needs converting too and the `sed` above does not touch it.** `prematch` runs
-`0,30 11-22` — every half hour across the range that covers every Premier League kickoff — and an
+`5,35 11-22` — every half hour across the range that covers every Premier League kickoff — and an
 hour range cannot be shifted by matching on a literal the way the three fixed times can. Edit it by
-hand: on a Pi five hours behind the UK, `11-22` becomes `6-17`. Getting it wrong is the mildest
-failure in this file — the window is judged in UK time by the code whatever cron believes, so a
-wrong hour range can only mean some matches get no message, never that a Reading is taken at a
+hand: on a Pi five hours behind the UK, `11-22` becomes `6-17`. Getting the *hours* wrong is the
+mildest failure in this file — the window is judged in UK time by the code whatever cron believes,
+so a wrong hour range can only mean some matches get no message, never that a Reading is taken at a
 moment it did not happen (`epl.live.prematch`).
+
+**Do not change the minutes.** `5,35` is not cosmetic: on `0,30` this line fires in the same second
+as both `seal` fires, and until 4 Sep 2026 that meant one of them could be — and on 1 Sep was —
+skipped for a prematch fire with nothing to do. `run_live.sh` now makes the loop win that contest
+outright, so a collision costs a few seconds rather than a round; the minutes are what keep it from
+happening at all. `tests/deploy/test_the_schedule_does_not_collide.py` checks the committed file,
+and cannot see what you install here — so if you shift the hours, keep the minutes off `0` and `30`.
 
 If you would rather not run it at all to begin with, drop the line: nothing else depends on it. The
 loop still seals, scores and pushes, and the bot still answers every command; what you lose is the

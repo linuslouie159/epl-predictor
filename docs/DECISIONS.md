@@ -1853,24 +1853,82 @@ asked later; measuring it is its own ticket.
 ### The schedule fires forty times harder, and had to get cheaper to match
 
 `prematch` runs every half hour from 11:00 to 22:00 against a window of 45 to 75 minutes before
-kickoff. That cadence and that window are one decision: every Premier League kickoff falls on a
-quarter-hour, so each is inside at least one fire's window — 20:00 caught at 19:00, 17:30 at 16:30,
-12:30 at 11:30 — and most are inside two, which the store's dedupe absorbs.
+kickoff. That cadence and that window are one decision: a fire at minute `m` catches kickoffs in
+`(m+45, m+75]`, so a half-hourly cadence tiles the hour and every Premier League kickoff — all of
+which fall on a quarter-hour — is inside exactly one fire's window.
 `tests/live/test_prematch.py` checks the cadence against the window rather than trusting the
-arithmetic in this paragraph.
+arithmetic in this paragraph, and reads the fire minutes out of `deploy/crontab` rather than
+restating them. It did restate them, and see below for what that cost.
 
 Most of those twenty-two daily fires have nothing to do, so the expensive half sits behind a cheap
 one. `epl.live.__main__._prematch` asks the sealed store first — one small file, no network, no fit
 — and exits 0 having printed one line. Only a fire with a Fixture in its window pays for a refresh
-of the Live Season, a rebuild of the match table and a run of every Predictor.
+of the Live Season, a rebuild of the match table and a run of every Predictor. Measured on the Pi,
+an empty fire takes about two seconds end to end.
 
-Two consequences worth writing down. It **shares the loop's flock**, deliberately: two containers
-committing into one checkout is a corrupt index, so a prematch fire landing inside a slow `score`
-stands down, costing at most one of the two chances a Fixture gets. And it writes to its **own log**,
-`deploy/logs/prematch.log`, because `live_loop.log` is the file a person opens when something has
-gone wrong and it holds three fires a week; burying those under a thousand lines saying nothing
-kicks off within the hour would cost that file the thing it is for. Both logs share a format and a
-parser, and `/health` reports the last fire of each.
+It writes to its **own log**, `deploy/logs/prematch.log`, because `live_loop.log` is the file a
+person opens when something has gone wrong and it holds three fires a week; burying those under a
+thousand lines saying nothing kicks off within the hour would cost that file the thing it is for.
+Both logs share a format and a parser, and `/health` reports the last fire of each.
+
+### And then it took the lock off the seal
+
+`prematch --push` commits into the same bind-mounted checkout the loop seals into, so it **shares
+the loop's flock**: two containers committing at once is a corrupt index. That was right and is
+kept. What was written down beside it — that a prematch fire landing inside a slow `score` stands
+down, costing at most one of the two chances a Fixture gets at a card — was a description of a
+priority *nothing implemented*. `flock -n` has no priority. Whichever process the kernel handed the
+lock to won, and the other exited 0.
+
+That would have stayed theoretical if the two schedules had not been put on the same minutes.
+`prematch` was scheduled `0,30 11-22` — the hour and the half hour — and the two `seal --push` fires
+are at 16:00 and 18:30. **Every Tuesday and Friday, both of a round's sealing chances raced a
+prematch fire**, in the same second, for the same lock.
+
+Measured on the Pi on 2026-09-01, 11:00:01 -0400, which is 16:00 UK:
+
+```
+live_loop.log:  live loop already running (seal); standing down
+prematch.log:   ===== RUN 2026-09-01 11:00:01 -0400  (prematch --push) =====
+                ===== END  2026-09-01 11:00:04 -0400  (exit 0) =====
+```
+
+The seal lost, to a fire that had nothing to do and was finished three seconds later. At 13:30 the
+race went the other way and the retry ran, which is the only reason this is a near miss rather than
+a lost round — and a round that loses both fires is lost for good, because `supersede` refuses a
+round at or after its first kickoff (ADR 0005).
+
+**It was also invisible, which is the half that made it dangerous.** `run_live.sh` exited before it
+reached the notifier, and `epl.bot.fires.parse` drops lines outside a `===== RUN` block on purpose —
+its docstring names the stand-down as one of the two lines it must not count, because a stand-down
+is the *absence* of a fire. So the schedule reported exit 0 twice a week while skipping half its
+chances to seal, and nothing that reads this deployment could have said so: not cron, which says
+nothing about a zero exit; not the operator's log; not `/health`.
+
+Three changes, and the reason there are three:
+
+- **`deploy/run_live.sh` states the priority.** `prematch` takes `flock -n` and stands down at once;
+  everything else takes `flock -w 600` and waits. This is the fix. It has to live in the shell,
+  because the lock exists to stop a second container starting at all — a priority expressed in
+  `epl.live` would be a priority expressed inside the process that was not allowed to run. The
+  wrapper's header used to say it "holds no policy"; it now says it holds exactly one, and names it.
+- **A loop fire that times out writes a failed block** in the log's own `RUN`/`END (exit 1)` format
+  and then notifies, rather than printing a line nothing reads. No new parser and no new message:
+  `Fire.failed` already reports it and `epl.bot.notify` already announces it. The prematch
+  stand-down stays a bare line, because it genuinely is not a fire and nothing was lost.
+- **`deploy/crontab` moved `prematch` to `5,35`**, so the two schedules never contend and the wait
+  path stays cold. Five minutes changes nothing else — 20:00 is caught at 18:35, 12:30 at 11:35.
+
+Either the lock or the shift would have been enough on its own. Both, because they fail
+independently: a future line added on a shared minute is caught by the lock, and a future edit to
+the lock is caught by the schedule not colliding.
+
+`tests/deploy/test_the_schedule_does_not_collide.py` pins all of it, and the shape of that test is
+the lesson. Every existing test of this schedule read **one line at a time** — is the script
+committed executable, does the window catch every kickoff. A collision is a property of a *pair*,
+and nothing looked at pairs. It parses the committed crontab (`tests/the_schedule.py`) rather than
+restating it, which is also what repaired the cadence test: that one built its fires from
+`range(0, 24 * 60, 30)`, so it would have gone on passing against a crontab saying anything at all.
 
 ### The messages themselves, and the three ways formatting fails silently
 
@@ -1995,4 +2053,4 @@ and a spread of one is zero, which reads as perfect agreement rather than as not
 4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.
 6. **A round whose sealing window passes while the Pi is off is lost, and cannot be recovered.** This is the price of choosing a machine at home over GitHub Actions at stage 15, and it was chosen knowingly — see "The schedule, and where it runs". `supersede` refuses a round after its first kickoff on purpose, so there is no catching up afterwards. **Its trigger has now fired.** This risk said to revisit it "the moment `fixtures.csv` starts carrying Premier League rows", and that moment was 28 Aug 2026: the Pi's uptime is now load-bearing for the one store in this project that cannot be regenerated. Measured on the day it was deployed, and the reason it is being *kept* rather than escalated: the Pi had been up **32 days continuously**, `vcgencmd get_throttled` reported `0x0` — no undervoltage or thermal event since boot — it runs from NVMe rather than an SD card, and it already carries a second production tenant whose owner would notice an outage independently. The loop also fires twice per window, so only an outage spanning both loses a round. That is judged sufficient for now and it is a judgement, not a proof: a single home machine has no redundancy, and one long outage over a Friday is all it takes. The mitigation short of moving is to watch `deploy/logs/live_loop.log` for a week with no `===== RUN` block in it, which is what an off Pi looks like from here. **Stage 17 automated that half and did not close the risk.** `epl.bot.watch.absent` reports the anchor days that went by unfired, and it is explicitly *not* a dead man's switch: the bot runs on the Pi, so an outage still in progress is reported by nobody. It speaks when the machine comes back. Closing this needs a second host, which is the argument this risk lost in the first place.
-7. **The rolling fixtures file is reliable in shape but not in time, and a round is lost if every fetch inside its window lands on a stale copy.** This is what open risk 2 became when it closed. Upstream regenerates `fixtures.csv` irregularly: three fetches across 21–27 Aug 2026 found a file that had not been rewritten in two and a half days *across a matchday*, and the fourth, on 28 Aug, found one written three hours earlier carrying the whole round. Nothing distinguishes the two cases except when the fetch happened to land. The schedule is the mitigation — two fires per window, at 16:00 and 18:30 UK, so a single stale sample does not lose the round — and it is a mitigation rather than a fix, because both fires read the same upstream file and a copy stale for a whole afternoon defeats both. **Do not confuse this with open risk 6.** That one is about this machine being off; this one happens with the Pi up, the loop green and the log reporting exit 0, because "no Premier League row in the file" is a quiet success by design and is indistinguishable from a genuinely empty week. **Stage 17 made it visible without closing it.** `epl.bot.watch.stale_upstream` reports when both of a round's fires read cached copies with identical bytes, which means upstream did not regenerate across the window — the honest claim being that nobody can then tell an empty week from a lost round, rather than that a round was lost. Knowing costs nothing and changes nothing: `supersede` still refuses a round after kickoff. What would close it is a source with a stated refresh guarantee, which is one of the two surviving arguments in `epl.v2.api_football.WHAT_WOULD_REVIVE_IT`. The other, and the stronger of the pair, is the live Season Projection: this risk costs a round when it bites, and that one cannot be built at all from a file three days wide.
+7. **The rolling fixtures file is reliable in shape but not in time, and a round is lost if every fetch inside its window lands on a stale copy.** This is what open risk 2 became when it closed. Upstream regenerates `fixtures.csv` irregularly: three fetches across 21–27 Aug 2026 found a file that had not been rewritten in two and a half days *across a matchday*, and the fourth, on 28 Aug, found one written three hours earlier carrying the whole round. Nothing distinguishes the two cases except when the fetch happened to land. The schedule is the mitigation — two fires per window, at 16:00 and 18:30 UK, so a single stale sample does not lose the round — and it is a mitigation rather than a fix, because both fires read the same upstream file and a copy stale for a whole afternoon defeats both. **Do not confuse this with open risk 6.** That one is about this machine being off; this one happens with the Pi up, the loop green and the log reporting exit 0, because "no Premier League row in the file" is a quiet success by design and is indistinguishable from a genuinely empty week. **Stage 17 made it visible without closing it.** `epl.bot.watch.stale_upstream` reports when both of a round's fires read cached copies with identical bytes, which means upstream did not regenerate across the window — the honest claim being that nobody can then tell an empty week from a lost round, rather than that a round was lost. Knowing costs nothing and changes nothing: `supersede` still refuses a round after kickoff. What would close it is a source with a stated refresh guarantee, which is one of the two surviving arguments in `epl.v2.api_football.WHAT_WOULD_REVIVE_IT`. The other, and the stronger of the pair, is the live Season Projection: this risk costs a round when it bites, and that one cannot be built at all from a file three days wide. **A corollary found on 4 Sep 2026:** the mitigation *is* the two fires, so anything that silently costs one of them halves it. A `prematch` line scheduled on the same minutes did exactly that for four days — see "And then it took the lock off the seal" — and the general form is worth holding on to: a change that looks like it only affects the messages can reach this risk through the schedule they share.

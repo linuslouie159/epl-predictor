@@ -122,24 +122,46 @@ class TestTheBotIsAServiceThatComesBack:
 
 
 class TestTheNotifierCannotBreakTheRun:
+    """The notifier is a shell function with two callers now, and these read the call sites.
+
+    They used to read source order against the single inline `docker compose ... run --rm notify`
+    line: exit code captured above it, `===== END` written above it. That was a fair proxy while
+    there was one caller, and it stopped being one when the lock-timeout path needed to notify too
+    (`deploy/run_live.sh`, and the collision that made it necessary is documented in
+    `test_the_schedule_does_not_collide.py`). Source order and execution order are the same thing
+    only until somebody writes a function, so these now say what they always meant.
+    """
+
+    #: Every place the script actually calls the notifier — the ordinary end of a run, and a loop
+    #: fire that could not take the lock. Not the definition, which sits above both by necessity.
+    CALL = "\nnotify_about_the_fire\n", "\n    notify_about_the_fire\n"
+
     def test_the_schedule_exits_with_the_loop_s_code_and_not_the_notifier_s(self) -> None:
         script = _read(RUN_LIVE)
 
         assert script.rstrip().endswith('exit "$run_exit"')
-        assert script.index("run_exit=$?") < script.index("run --rm notify")
+        # Captured from the loop's own container, on the line after it, so nothing run later —
+        # the notifier included — can be what cron learns.
+        assert "run --rm live " in script.split("run_exit=$?")[0].rsplit("\n", 2)[-2]
 
     def test_the_notifier_call_cannot_fail_the_script(self) -> None:
+        """One `|| true`, inside the function, so it covers every caller rather than the first."""
         script = _read(RUN_LIVE)
-        call = script[script.index("run --rm notify"):]
+        body = script[script.index("notify_about_the_fire() {"):]
 
-        assert "|| true" in call.split("\n\n")[0]
+        assert "|| true" in body.split("\n}")[0]
 
-    def test_it_is_called_after_the_end_line_the_bot_reads(self) -> None:
-        """The notifier reads the exit code off the `===== END` line, so that line has to exist
-        before it runs. Calling it earlier would report every fire as unfinished."""
+    @pytest.mark.parametrize("call", CALL)
+    def test_it_is_called_after_the_end_line_the_bot_reads(self, call: str) -> None:
+        """The notifier reads the exit code off the `===== END` line, so that line has to be
+        written before it runs — at *every* call site. Calling it earlier would report the fire as
+        unfinished, and the lock-timeout path exists precisely to be reported."""
         script = _read(RUN_LIVE)
+        before = script[: script.index(call)]
 
-        assert script.index("===== END") < script.index("run --rm notify")
+        assert "===== END  %s" in before, (
+            f"the notifier is called at {call.strip()!r} without an END line written first"
+        )
 
     @pytest.mark.parametrize("subcommand", ["seal", "score"])
     def test_the_notifier_is_told_which_command_ran(self, subcommand: str) -> None:

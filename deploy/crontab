@@ -47,10 +47,21 @@ CRON_TZ=Europe/London
 # WHY prematch RUNS EVERY HALF HOUR, AND ONLY BETWEEN 11:00 AND 22:00.
 #
 # It takes a Pre-Match Reading of whatever kicks off in 45 to 75 minutes (epl.live.prematch) and
-# the bot sends one card per match. Against a window that wide, firing on the hour and the half
-# hour catches every Premier League kickoff, all of which fall on a quarter past, half or o'clock:
-# 20:00 is caught at 19:00, 17:30 at 16:30, 12:30 at 11:30, 16:30 at 15:30, a midweek 19:45 twice.
-# The store's own dedupe absorbs the second sighting (epl.ledger.readings.already_read).
+# the bot sends one card per match. A fire at minute m catches kickoffs in (m+45, m+75], so any
+# half-hourly cadence tiles the hour exactly and every Premier League kickoff — all of which fall
+# on a quarter past, half or o'clock — is inside exactly one fire's window.
+#
+# WHY :05 AND :35 RATHER THAN THE HOUR AND THE HALF HOUR. Because those are the minutes the seal
+# fires land on, and stage 18 put this line on them. All four lines share one lock, cron started
+# two of them in the same second, and on 2026-09-01 at 16:00 UK it was the SEAL that lost and stood
+# down — for a prematch fire that had nothing to do and was finished three seconds later. The round
+# survived on the 18:30 retry winning its own race, and a round that loses both is lost for good.
+#
+# run_live.sh now gives the loop priority outright, so this shift is not what makes the schedule
+# correct — it is what keeps the loop from ever having to wait. Both, because the lock is the fix
+# and a schedule that does not collide is the reason the fix stays cold. Five minutes moves nothing
+# else: 20:00 is caught at 18:35, 17:30 at 16:35, 12:30 at 11:35, a midweek 19:45 at 18:35.
+# The store's own dedupe absorbs a second sighting (epl.ledger.readings.already_read).
 #
 # The hours bound the cost rather than the correctness. The earliest Premier League kickoff is
 # 12:30 and the latest 20:15, so 11:00 to 22:00 covers every one of them with an hour spare at
@@ -61,10 +72,12 @@ CRON_TZ=Europe/London
 # exits 0 having printed one line. Only a fire with something in its window pays for a fetch, a
 # rebuild of the match table and a fit.
 #
-# IT SHARES THE LOCK with the two commands above, deliberately. Two containers committing into one
-# checkout at once is a corrupt index, so a prematch fire that lands inside a slow `score` stands
-# down quietly. That costs at most one of the two chances a Fixture gets, which is the right way
-# round: the loop that seals and scores matters more than a message about one match.
+# IT SHARES THE LOCK with the three commands above, deliberately — it commits too, and two
+# containers committing into one checkout at once is a corrupt index. It is also the side that
+# YIELDS: a prematch fire landing inside a slow `score` stands down at once, while a seal or a
+# score landing inside a slow prematch waits for it. That costs at most one of the two chances a
+# Fixture gets at a card, which is the right way round, and it is a branch in run_live.sh rather
+# than a sentence here — which is the whole of what went wrong on 1 Sep.
 #
 # NOTHING HERE READS A ROUND IT COULD SEAL. `prematch` writes only to outputs/prematch/, which is
 # not a Sealed Prediction store and is not scored (epl.ledger.readings). The sealed round stands.
@@ -73,7 +86,7 @@ CRON_TZ=Europe/London
   0  6  *   *   2,5  __ROOT__/deploy/run_live.sh score
   0 16  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push
  30 18  *   *   2,5  __ROOT__/deploy/run_live.sh seal --push
-0,30 11-22 *  *   *  __ROOT__/deploy/run_live.sh prematch --push
+5,35 11-22 *  *   *  __ROOT__/deploy/run_live.sh prematch --push
 
 # Nothing here fires more often than that, and nothing here runs `python -m epl.ledger backfill`.
 # The Evaluation Window is over closed Seasons and must go on meaning the same thing from one week

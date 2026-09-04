@@ -28,6 +28,7 @@ from epl.ledger import readings, schema, scoreboard
 from epl.live import prematch, seal, upcoming
 from epl.paths import live_dir, prematch_dir
 from epl.predictors import Corpus
+from the_schedule import CronLine  # tests/ is on sys.path, as tests/bot/log_blocks.py relies on
 
 #: The round every test here works from: two Fixtures on the Saturday, anchored to Friday.
 ROUND_FIXTURES: tuple[dict[str, object], ...] = (
@@ -40,6 +41,13 @@ INSIDE_THE_WINDOW = pd.Timestamp("2026-08-28 14:00:30")
 
 #: An hour before the first Fixture, which is where a Reading is taken.
 AN_HOUR_BEFORE = pd.Timestamp("2026-08-29 14:00:00")
+
+#: The hours a Premier League match can kick off in. `deploy/crontab` names 12:30 as the earliest
+#: and 20:15 as the latest, and bounds its own fires to 11:00-22:00 on that basis — so this is the
+#: span the cadence is required to cover, and a kickoff outside it is out of scope rather than a
+#: gap. Whole hours, because the test sweeps every quarter-hour inside each of them.
+EARLIEST_KICKOFF = 12
+LATEST_KICKOFF = 20
 
 
 @pytest.fixture
@@ -86,19 +94,36 @@ class TestWhichFixturesAreDue:
     def test_a_fixture_that_has_kicked_off_is_not(self, sealed: pd.DataFrame) -> None:
         assert prematch.due(sealed, now=pd.Timestamp("2026-08-29 15:30")).empty
 
-    def test_every_kickoff_on_a_quarter_hour_is_caught_by_a_half_hourly_schedule(
-        self, sealed: pd.DataFrame
+    @pytest.mark.parametrize(
+        "kickoff_time",
+        [
+            f"{hour:02d}:{minute:02d}"
+            for hour in range(EARLIEST_KICKOFF, LATEST_KICKOFF + 1)
+            for minute in (0, 15, 30, 45)
+        ],
+    )
+    def test_every_kickoff_on_a_quarter_hour_is_caught_by_the_crontab_s_own_cadence(
+        self, schedule: tuple[CronLine, ...], kickoff_time: str
     ) -> None:
         """The window and the crontab cadence are one decision and have to be checked together.
 
-        `deploy/crontab` fires on the hour and the half hour; the window is 45 to 75 minutes. Every
-        Premier League kickoff falls on a quarter-hour, so each must be inside at least one fire's
-        window — otherwise a match silently gets no message and the schedule looks fine.
+        The window is 45 to 75 minutes and every Premier League kickoff falls on a quarter-hour, so
+        each must be inside at least one fire's window — otherwise a match silently gets no message
+        and the schedule looks fine.
+
+        **The fires come from `deploy/crontab` rather than from a literal here**, and that is the
+        repair rather than a tidy-up. This test used to build them from `range(0, 24 * 60, 30)`, a
+        restatement of a cadence the crontab was free to change underneath it — and the crontab did
+        change, moving to :05 and :35 so that `prematch` stops colliding with the two `seal` fires
+        (see `tests/deploy/test_the_schedule_does_not_collide.py`). Read from the file, the
+        docstring's claim is true of the code; restated, it was true only of the sentence.
         """
-        kickoff = pd.Timestamp("2026-08-29 15:00")
+        (line,) = [entry for entry in schedule if entry.subcommand == "prematch"]
+        kickoff = pd.Timestamp(f"2026-08-29 {kickoff_time}")
         fires = [
-            kickoff.normalize() + pd.Timedelta(minutes=minutes)
-            for minutes in range(0, 24 * 60, 30)
+            kickoff.normalize() + pd.Timedelta(hours=hour, minutes=fired)
+            for hour in sorted(line.hours)
+            for fired in sorted(line.minutes)
         ]
         caught = [
             moment
@@ -106,7 +131,12 @@ class TestWhichFixturesAreDue:
             if moment + prematch.WINDOW_SHUTS < kickoff <= moment + prematch.WINDOW_OPENS
         ]
 
-        assert len(caught) >= 1
+        assert len(caught) >= 1, (
+            f"a kickoff at {kickoff:%H:%M} falls in no fire's window, so it would silently get no "
+            f"card: the crontab fires at minutes {sorted(line.minutes)} of hours "
+            f"{sorted(line.hours)} and the window is "
+            f"{prematch.WINDOW_SHUTS}-{prematch.WINDOW_OPENS} before kickoff"
+        )
 
     def test_nothing_is_due_when_nothing_was_sealed(self, project_root: Path) -> None:
         """A round the loop failed to seal gets no pre-match messages either, and that is honest:
