@@ -58,6 +58,7 @@ from epl.ingest.football_data import match_table
 from epl.ledger import live as store
 from epl.ledger import scoreboard
 from epl.paths import processed_dir
+from epl.rounds import round_id
 from epl.windows import EVALUATION_WINDOW, LIVE_SEASON, season_label
 
 #: How many lines of a failed run's output to quote. Enough to see the complaint, short of pasting
@@ -189,7 +190,9 @@ def explain() -> str:
     )
 
 
-def round_digest(prediction_round: str | None = None) -> str:
+def round_digest(
+    prediction_round: str | None = None, *, now: pd.Timestamp | None = None
+) -> str:
     """One Sealed Prediction Round: every Fixture in it, and what the model makes of each.
 
     Defaults to the most recent round in the store. A round that was never sealed is said to be
@@ -199,6 +202,13 @@ def round_digest(prediction_round: str | None = None) -> str:
     This is both `/week` and the body of the announcement sent when a round seals, which is what
     makes the weekly preview free: the loop already fires a notifier at the moment the round is
     written, and there is nothing a separate schedule would know that this does not.
+
+    **``now`` is what stops a finished round reading as a broken bot.** The newest sealed round is
+    the current one from Friday afternoon until Monday night and a museum piece for the three days
+    after, and until this took a clock there was nothing in the message to tell the two apart — a
+    round six days old rendered exactly like tonight's. Asked for rather than taken from a global
+    so the announcement sent at the moment of sealing can pass none and get the plain digest, which
+    is the one case where "is it over" is known without asking.
     """
     sealed = store.read()
     if sealed.empty:
@@ -222,6 +232,10 @@ def round_digest(prediction_round: str | None = None) -> str:
     as_of = pd.Timestamp(rows["as_of_instant"].min())
     first, last = fixtures["kickoff"].min(), fixtures["kickoff"].max()
 
+    # A round nobody asked for by name, whose last match finished, is history rather than news.
+    if prediction_round is None and now is not None and _is_over(last, now):
+        return _round_is_over(wanted, rows, last, now)
+
     spoke = sorted(set(rows["predictor"]))
     parts = [
         _headline(rows, wanted, as_of, first, last),
@@ -232,10 +246,163 @@ def round_digest(prediction_round: str | None = None) -> str:
         # four-column table under ten Fixtures; a single-match card carries their numbers.
         f"Sealed by {', '.join(spoke)}. The numbers above are the model's ({HEADLINE_MODEL}); "
         "/next and /club show every Predictor that spoke on one match.",
+        # Which round this is, always. A digest that named no round read identically whether it
+        # was tonight's or six days stale, and the stale one is what made the bot look broken.
+        _how_current(wanted, last, now),
         _silence(set(spoke)),
         "You will get a message about an hour before each kick-off.",
     ]
     return render.document(parts)
+
+
+#: How long after a kickoff a match is certainly finished. Ninety minutes plus half-time plus
+#: stoppage plus the walk to the tunnel; nothing here needs it tighter, because the question it
+#: answers is "is this round history" and the answer only has to be right by bedtime.
+#: The only tier this bot reports on. `parse_fixtures` defaults to all four, and a `/week`
+#: listing League Two beneath the Premier League would be a different bot.
+PREMIER_LEAGUE = "E0"
+
+MATCH_LENGTH = pd.Timedelta(hours=2, minutes=30)
+
+
+def _is_over(last_kickoff: object, now: pd.Timestamp) -> bool:
+    """Whether every Fixture of a round has been played.
+
+    From the kickoff and the clock rather than from results in the corpus, deliberately. The
+    corpus only learns a result when `score` next runs, which on this schedule is the following
+    Tuesday or Friday morning — so waiting for results would call Sunday's finished round "current"
+    for another two days, which is exactly the confusion this exists to remove.
+    """
+    return fires.wall_clock(now) > pd.Timestamp(last_kickoff) + MATCH_LENGTH
+
+
+def _round_is_over(wanted: str, rows: pd.DataFrame, last: object, now: pd.Timestamp) -> str:
+    """What `/week` says when the round it holds has finished: how it went, and what is next.
+
+    Three things in one message, because the question a reader actually has mid-week is "what
+    happened and what now", and the old digest answered neither — it re-rendered a stale forecast
+    for matches already played, with nothing saying they had been.
+
+    The fixtures at the bottom come from the newest **cached** copy of the rolling file, never a
+    fetch: :func:`epl.ingest.fixtures.latest_fixtures_path` and :func:`~epl.ingest.fixtures.
+    parse_fixtures` are readers, and the bot may not reach upstream (`tests/bot/
+    test_the_bot_is_read_only.py`). The loop caches a copy at every fire, so by the time a round is
+    over there is always one to read — and if there is not, that is said rather than papered over.
+
+    **No numbers against those fixtures, and that is not timidity.** They are not sealed yet, so
+    the model has not spoken about them; printing the market's odds beside them would put a number
+    in a forecast-shaped message that no Predictor said and no ledger holds.
+    """
+    parts = [f"ROUND OF {wanted} IS OVER", _how_it_went(wanted, rows, last, now)]
+    parts += _what_is_next(wanted, now)
+    return render.document(parts)
+
+
+def _how_it_went(wanted: str, rows: pd.DataFrame, last: object, now: pd.Timestamp) -> str:
+    """The finished round's scorelines, or why they are not here yet.
+
+    `score` runs on the next Tuesday or Friday morning, so there is a real window — most of Monday,
+    say — in which the round is certainly over and the corpus certainly does not know it. Saying so
+    is better than an empty table, and much better than silence.
+    """
+    matches = _matches()
+    if matches is None:
+        return "The match table is not on this machine, so how it went cannot be shown."
+
+    model = rows.loc[rows["predictor"].eq(HEADLINE_MODEL)]
+    played = model.merge(
+        matches[["season", "division", "home_club", "away_club", "home_goals", "away_goals",
+                 "outcome"]],
+        on=["season", "division", "home_club", "away_club"],
+        how="inner",
+    )
+    if played.empty:
+        return (
+            f"The last match kicked off {render.relative(last, fires.wall_clock(now))} and the "
+            "results are not in the corpus yet - they arrive when the loop next scores, on its "
+            "own Tuesday or Friday morning. /results will have them then."
+        )
+
+    lines, right = _scorelines(played.sort_values("kickoff"))
+    return render.combine(
+        render.block(lines),
+        f"{right} of {len(played)} picks were right - the lay reading, not the score. /record "
+        "has the score.",
+    )
+
+
+def _what_is_next(wanted: str, now: pd.Timestamp) -> list[str]:
+    """The Fixtures of a round that has not been sealed, read off the cached rolling file."""
+    fixtures = _cached_fixtures(now)
+    if fixtures is None:
+        return [
+            "NEXT UP",
+            "No copy of the fixtures file has been cached on this machine yet, so what comes "
+            "next cannot be listed. The loop caches one at every fire.",
+        ]
+    if fixtures.empty:
+        return [
+            "NEXT UP",
+            "The fixtures file holds no Premier League match that has not kicked off. Upstream "
+            "lists a round a few days ahead, so this is normal well before one and is open "
+            "risk 7 close to one.",
+        ]
+
+    when = round_id(fixtures["kickoff"].min().date())
+    lines = []
+    for _day, matches in fixtures.groupby(fixtures["kickoff"].dt.date, sort=True):
+        lines.append(render.day_heading(matches["kickoff"].iloc[0]))
+        for _, row in matches.iterrows():
+            lines.append(
+                f"  {render.time_only(row['kickoff'])} "
+                f"{render.short(row['home_club'])} v {render.short(row['away_club'])}"
+            )
+    return [
+        f"NEXT UP - ROUND OF {when}",
+        render.block(lines),
+        f"Not sealed yet, so there is no forecast for these: the models run at 16:00 UK on "
+        f"{when} and a message goes out when they do. Read off the cached fixtures file, so "
+        "upstream may still add to it.",
+    ]
+
+
+def _cached_fixtures(now: pd.Timestamp) -> pd.DataFrame | None:
+    """Premier League Fixtures that have not kicked off, from the newest cached rolling file.
+
+    ``None`` when nothing has been cached at all, which is a different answer from an empty frame
+    and is said differently. Never fetches — see :func:`_round_is_over`.
+    """
+    path = latest_fixtures_path()
+    if path is None:
+        return None
+    try:
+        upcoming = parse_fixtures(path, divisions=(PREMIER_LEAGUE,))
+    except Exception:  # pragma: no cover - a malformed cache must not take the bot down
+        return None
+    if upcoming.empty:
+        return upcoming
+    return (
+        upcoming.loc[upcoming["kickoff"] > fires.wall_clock(now)]
+        .sort_values("kickoff")
+        .reset_index(drop=True)
+    )
+
+
+def _how_current(wanted: str, last: object, now: pd.Timestamp | None) -> str:
+    """Which round this is and whether it is the live one, in one line at the foot of the digest.
+
+    Without a clock it can only name the round, which is still more than the digest used to say.
+    """
+    if now is None:
+        return f"This is the round of {wanted}."
+    moment = fires.wall_clock(now)
+    finish = pd.Timestamp(last) + MATCH_LENGTH
+    if moment < finish:
+        return (
+            f"This is the round of {wanted}, the current one - it finishes "
+            f"{render.relative(finish, moment)}."
+        )
+    return f"This is the round of {wanted}."
 
 
 def next_match(now: pd.Timestamp) -> str:
@@ -603,6 +770,27 @@ def last_results() -> str:
     wanted = str(played["prediction_round"].max())
     round_rows = played.loc[played["prediction_round"] == wanted].sort_values("kickoff")
 
+    lines, right = _scorelines(round_rows)
+
+    return render.document(
+        [
+            "LAST ROUND",
+            f"Round of {wanted}, {len(round_rows)} matches played",
+            render.block(lines),
+            f"{right} of {len(round_rows)} picks were right. That is the lay reading and not "
+            "the score: this project is judged on how well-calibrated its probabilities are "
+            "(RPS), which /record has, and a 40 that comes in is a good forecast.",
+        ]
+    )
+
+
+def _scorelines(round_rows: pd.DataFrame) -> tuple[list[str], int]:
+    """How a played round actually went, and how many picks came in.
+
+    Split out of :func:`last_results` because :func:`round_digest` shows the same thing once its
+    round is over, and two renderings of one scoreline is how the two come to disagree about what
+    "called" means.
+    """
     lines: list[str] = []
     right = 0
     for _, row in round_rows.iterrows():
@@ -622,17 +810,7 @@ def last_results() -> str:
             f"       called {_named(row, called[0])} {called[1]}"
             f"{'' if hit else ' - wrong'}"
         )
-
-    return render.document(
-        [
-            "LAST ROUND",
-            f"Round of {wanted}, {len(round_rows)} matches played",
-            render.block(lines),
-            f"{right} of {len(round_rows)} picks were right. That is the lay reading and not "
-            "the score: this project is judged on how well-calibrated its probabilities are "
-            "(RPS), which /record has, and a 40 that comes in is a good forecast.",
-        ]
-    )
+    return lines, right
 
 
 def live_record() -> str:

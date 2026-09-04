@@ -94,7 +94,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         "week",
         "Every match in the current round",
-        lambda argument, now: answers.round_digest(argument or None),
+        lambda argument, now: answers.round_digest(argument or None, now=now),
     ),
     Command(
         "bet",
