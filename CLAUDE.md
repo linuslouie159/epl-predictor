@@ -183,6 +183,19 @@ Do not "fix" these without reading the linked ADR first:
   them, and **`Wimbledon`, `Milton Keynes Dons` and `AFC Wimbledon` are three separate Clubs**.
   Both are explained where they live — `src/epl/ingest/cache.py`, which both the Football-Data
   ingest and the Pundit fetch write through, and `src/epl/clubs/table.py`.
+- **A 503 is retried and a 404 is not**, and the asymmetry is the point. `default_fetcher` wraps the
+  real fetcher in `epl.ingest.fetcher.retrying` — three attempts at one URL, 2 s and 8 s apart —
+  because a 503 on `fixtures.csv` killed a whole `seal` fire before it could learn whether there was
+  a round in the file to seal. **It covers a moment and not a day**, and the day is measured: on
+  8 Sep 2026 all four of the Pi's fires failed on 503s from 06:00 to 18:30 UK across two URLs, and
+  no backoff that fits inside a sealing window would have saved them. A 5xx, a 429 and a failure
+  carrying no response at all are upstream saying *not now*; every other 4xx says it is not there, and
+  asking three times does not publish it — `python -m epl.live score` refreshes the Live Season
+  twice a week all year, including the weeks before a new Season's four files appear. It
+  deliberately does **not** fall back to the cached rolling file: a cached copy that no longer
+  carries the round yields `NothingToSeal` and exit 0, which would turn the one loud failure into
+  the silent one. Every retry prints a line inside the run's own log block, so a fire that needed
+  two attempts is not identical on disk to one that needed a single attempt.
 - **The Season pages are named in `PAGES` *and* discovered from an index, and both are correct.**
   The nine frozen Seasons are literals because they are over; the Season in progress cannot be,
   because the archive has used four slug conventions in eighteen Seasons and 2026/27 dropped the

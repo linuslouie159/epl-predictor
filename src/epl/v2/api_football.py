@@ -119,6 +119,12 @@ WHAT_WOULD_REVIVE_IT: tuple[str, ...] = (
     " is now the strongest of these conditions",
     "the free file starts omitting the market-average odds columns the Market Line is built from,"
     " leaving the Fixtures usable and the benchmark unfeedable",
+    "the free file becomes unreachable rather than merely stale, on a day that matters. Measured"
+    " once: on 8 Sep 2026 Football-Data answered 503 to all four of the Pi's scheduled fires, 06:00"
+    " to 18:30 UK, on fixtures.csv and on mmz4281/2627/E0.csv alike. That week carried no Premier"
+    " League round so it cost nothing, and the same twelve hours on an anchor Friday would lose one"
+    " outright. epl.ingest.fetcher.retrying covers a moment and cannot cover a day; a second source"
+    " is the only thing that could, which is what makes this a condition and not a grumble",
 )
 
 #: What building it would actually take, beyond deciding to.

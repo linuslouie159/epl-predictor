@@ -2136,6 +2136,92 @@ scoreboard behind it (ADR 0008), not a formatting change. `_consensus` returns n
 fewer than two models spoke, because a mean of one is that one under a name implying corroboration
 and a spread of one is zero, which reads as perfect agreement rather than as nothing to agree about.
 
+## The fetch upstream refused, and the three attempts it gets now
+
+On 8 Sep 2026 every fire on the Pi ended in a traceback rather than a sentence:
+
+```
+requests.exceptions.HTTPError: 503 Server Error: Service Temporarily Unavailable
+  for url: https://www.football-data.co.uk/fixtures.csv
+```
+
+`http_fetcher` calls `raise_for_status`, and nothing between there and `main` catches a `requests`
+exception — `_rolling`'s caller guards `epl.live.upcoming.LiveError` and a 503 is not one — so the
+interpreter died, `deploy/run_live.sh` recorded `END (exit 1)`, cron mailed it and the bot sent
+`epl.bot.answers.failure` with the tail. **That half worked exactly as designed** and is worth saying
+before the rest: this failure was loud, attributable and in the log within a second of happening.
+
+**It was not one fire and it was not a blip, and the log is worth reading before the fix is judged.**
+`deploy/logs/live_loop.log` records **four consecutive failures on 8 Sep**, every scheduled fire of
+that day: `score` at 06:00 UK on `mmz4281/2627/E0.csv`, then all three `seal` fires — 10:00, 16:00
+and 18:30 — on `fixtures.csv`. Twelve and a half hours, two different URLs, the same 503 each time.
+Football-Data was down for the day, not stumbling for a second.
+
+**No round was lost, and that was checked rather than hoped.** The newest sealed round is 2026-09-04,
+and the rolling file covering 8–10 Sep carries nine `E1` ties, one `E2` and six foreign — and **no
+`E0` row at all**. There was no Premier League round that week for those fires to seal, with or
+without a fetch. By 10 Sep the host was serving again: a fetch by hand returned 200, and `python -m
+epl.live upcoming` fetched cleanly from a second machine.
+
+### Three chances at a round is not three chances at a fetch
+
+The schedule already fires `seal` three times on an anchor day, and that redundancy is the whole
+mitigation for open risk 7. It buys nothing against this. Each fire died *at the fetch*, before it
+could learn whether there was a round to seal at all, so all three failed identically — and the
+`score` fire that morning had failed the same way on a different URL.
+
+**So be exact about what the retry is for, because 8 Sep is not it.** Three attempts ten seconds
+apart would not have rescued a single one of those four fires, and nothing that fits inside a
+sealing window would have. What they cover is the other and more common shape: one fire meeting one
+bad moment at a host that is otherwise up. That case had been costing a whole fire — the loop
+exiting 1 before it could learn whether a round existed — for want of asking twice, and it is cheap
+to remove. The day-long outage is left standing, named, and counted against open risk 7 rather than
+dressed up as fixed.
+
+So `epl.ingest.fetcher.default_fetcher` now returns `retrying(http_fetcher(timeout))`: three
+attempts at one URL, with waits of 2 s and 8 s between them. Every call site reaches upstream through
+that function — `fetch_season`, `fetch_all`, `fetch_fixtures` and the Pundit fetch — so nothing else
+changed.
+
+**A 4xx other than 429 is not retried, and the asymmetry is the point.** A 5xx, a 429 and a failure
+carrying no response at all are upstream saying "not now"; a 404 is upstream saying the file is not
+there, and asking three times does not publish it. That case is not hypothetical: `python -m
+epl.live score` refreshes the Live Season twice a week all year round, including the weeks before a
+new Season's four files appear upstream. Retrying it would dress "not published yet" in the shape of
+a network fault and pay the backoff four times over to do it. `worth_retrying` is a public function
+for that reason — the policy is the interesting half, the loop around it is not.
+
+**Ten seconds is the budget, and it is small on purpose.** The sealing window opens at 16:00 UK and
+shuts no earlier than a 19:45 first kickoff, so there is room for far more; but retrying for minutes
+would be spending the one thing the schedule cannot get back, and three fires a day is the coarser
+and better-tested redundancy. Worst case per URL is 10 s of waiting plus three 60 s timeouts, and
+`fetch_all` is a list comprehension, so the first URL that exhausts its attempts still aborts the run
+rather than multiplying that by 108.
+
+### Two things it deliberately does not do
+
+**It does not fall back to the cached rolling file.** `--cached` exists and is right for asking what
+*was* in a given week's file; it is wrong here. A cached copy that no longer carries the round yields
+`NothingToSeal`, which is exit 0 by design (issue #19) — so the fallback would convert this loud
+failure into the silent one, which is the trade the exit-code contract was written to refuse. A fire
+that could not fetch must say so.
+
+**It does not hide a retry that worked.** Each attempt prints one line naming the URL, the status and
+the attempt number, inside `run_live.sh`'s own `===== RUN` block. A retry that healed silently would
+be a fact about upstream's reliability that nothing recorded, on the one input whose reliability is
+already an open risk.
+
+It is composed as a wrapper rather than a loop inside `http_fetcher` so that the policy can be
+checked at all: `tests/ingest/test_fetcher.py` drives it with a fetcher that raises hand-built
+failures on cue and a `sleep` that records instead of waiting, so there is no network, no stand-in
+for `requests` and no suite three seconds slower for owning a backoff.
+
+**What it does not close** is the case that started open risk 7 from the other side, and 8 Sep is
+the measurement rather than the worry: upstream refusing for a whole day still costs the round,
+because `supersede` refuses a round after its first kickoff. Had that Tuesday carried a Premier
+League round, it would have been lost with the Pi up, the schedule firing on time and four failures
+correctly reported. Three attempts survive a moment, not a day. Mitigation, not a fix.
+
 ## Open risks
 
 1. ~~**BBC live scraping is unproven.** `www.bbc.co.uk` was unreachable during design, article URLs are opaque IDs (`/sport/football/articles/cvg0e92ezz4o`, legacy `/sport/football/28859459`) and there is no index page. Needs a spike at stage 5. If it fails, live pundit data has no confirmed source — MyFootballFacts' update latency during a season is unknown.~~ **Closed at stage 12, and the answer is no.** Both halves were tested for real on 27 Aug 2026 and both came back differently from the way the risk was written. See "The BBC spike" below: the BBC is *reachable* and its articles are machine-readable, and it is nonetheless **unusable**, because its terms forbid the thing this ticket would build; MyFootballFacts is permitted and is the source, and its measured latency means **a Pundit cannot be part of a Sealed Prediction**. That last sentence is a constraint on issue #17 rather than a gap left open.
@@ -2144,4 +2230,4 @@ and a spread of one is zero, which reads as perfect agreement rather than as not
 4. ~~**Cross-tier Elo has no burn-in before 2000/01**, so early ratings linking E0 to E3 will be unreliable.~~ **Closed at stage 5.** Measured: by the first scored Prediction Round the thinnest Premier League rating rests on **190 matches**, and every Club promoted into the Premier League in every scored Season arrives with a distinct rating built from more than 200. The cold start is real and is confined to 2000/01, which is why that Season warms the ratings and is not fitted on either. `tests/models/test_elo_over_the_corpus.py` re-derives both numbers.
 5. **Frozen hyperparameters will drift out of date** by the late Evaluation Window, given the measured decline in home advantage. Accepted deliberately; see ADR 0008.
 6. **A round whose sealing window passes while the Pi is off is lost, and cannot be recovered.** This is the price of choosing a machine at home over GitHub Actions at stage 15, and it was chosen knowingly — see "The schedule, and where it runs". `supersede` refuses a round after its first kickoff on purpose, so there is no catching up afterwards. **Its trigger has now fired.** This risk said to revisit it "the moment `fixtures.csv` starts carrying Premier League rows", and that moment was 28 Aug 2026: the Pi's uptime is now load-bearing for the one store in this project that cannot be regenerated. Measured on the day it was deployed, and the reason it is being *kept* rather than escalated: the Pi had been up **32 days continuously**, `vcgencmd get_throttled` reported `0x0` — no undervoltage or thermal event since boot — it runs from NVMe rather than an SD card, and it already carries a second production tenant whose owner would notice an outage independently. The loop also fires twice per window, so only an outage spanning both loses a round. That is judged sufficient for now and it is a judgement, not a proof: a single home machine has no redundancy, and one long outage over a Friday is all it takes. The mitigation short of moving is to watch `deploy/logs/live_loop.log` for a week with no `===== RUN` block in it, which is what an off Pi looks like from here. **Stage 17 automated that half and did not close the risk.** `epl.bot.watch.absent` reports the anchor days that went by unfired, and it is explicitly *not* a dead man's switch: the bot runs on the Pi, so an outage still in progress is reported by nobody. It speaks when the machine comes back. Closing this needs a second host, which is the argument this risk lost in the first place.
-7. **The rolling fixtures file is reliable in shape but not in time, and a round is lost if every fetch inside its window lands on a stale copy.** This is what open risk 2 became when it closed. Upstream regenerates `fixtures.csv` irregularly: three fetches across 21–27 Aug 2026 found a file that had not been rewritten in two and a half days *across a matchday*, and the fourth, on 28 Aug, found one written three hours earlier carrying the whole round. Nothing distinguishes the two cases except when the fetch happened to land. The schedule is the mitigation — two fires per window, at 16:00 and 18:30 UK, so a single stale sample does not lose the round — and it is a mitigation rather than a fix, because both fires read the same upstream file and a copy stale for a whole afternoon defeats both. **Do not confuse this with open risk 6.** That one is about this machine being off; this one happens with the Pi up, the loop green and the log reporting exit 0, because "no Premier League row in the file" is a quiet success by design and is indistinguishable from a genuinely empty week. **Stage 17 made it visible without closing it.** `epl.bot.watch.stale_upstream` reports when both of a round's fires read cached copies with identical bytes, which means upstream did not regenerate across the window — the honest claim being that nobody can then tell an empty week from a lost round, rather than that a round was lost. Knowing costs nothing and changes nothing: `supersede` still refuses a round after kickoff. What would close it is a source with a stated refresh guarantee, which is one of the two surviving arguments in `epl.v2.api_football.WHAT_WOULD_REVIVE_IT`. The other, and the stronger of the pair, is the live Season Projection: this risk costs a round when it bites, and that one cannot be built at all from a file three days wide. **A corollary found on 4 Sep 2026:** the mitigation *is* the two fires, so anything that silently costs one of them halves it. A `prematch` line scheduled on the same minutes did exactly that for four days — see "And then it took the lock off the seal" — and the general form is worth holding on to: a change that looks like it only affects the messages can reach this risk through the schedule they share.
+7. **The rolling fixtures file is reliable in shape but not in time, and a round is lost if every fetch inside its window lands on a stale copy.** This is what open risk 2 became when it closed. Upstream regenerates `fixtures.csv` irregularly: three fetches across 21–27 Aug 2026 found a file that had not been rewritten in two and a half days *across a matchday*, and the fourth, on 28 Aug, found one written three hours earlier carrying the whole round. Nothing distinguishes the two cases except when the fetch happened to land. The schedule is the mitigation — two fires per window, at 16:00 and 18:30 UK, so a single stale sample does not lose the round — and it is a mitigation rather than a fix, because both fires read the same upstream file and a copy stale for a whole afternoon defeats both. **Do not confuse this with open risk 6.** That one is about this machine being off; this one happens with the Pi up, the loop green and the log reporting exit 0, because "no Premier League row in the file" is a quiet success by design and is indistinguishable from a genuinely empty week. **Stage 17 made it visible without closing it.** `epl.bot.watch.stale_upstream` reports when both of a round's fires read cached copies with identical bytes, which means upstream did not regenerate across the window — the honest claim being that nobody can then tell an empty week from a lost round, rather than that a round was lost. Knowing costs nothing and changes nothing: `supersede` still refuses a round after kickoff. What would close it is a source with a stated refresh guarantee, which is one of the two surviving arguments in `epl.v2.api_football.WHAT_WOULD_REVIVE_IT`. The other, and the stronger of the pair, is the live Season Projection: this risk costs a round when it bites, and that one cannot be built at all from a file three days wide. **A corollary found on 4 Sep 2026:** the mitigation *is* the two fires, so anything that silently costs one of them halves it. A `prematch` line scheduled on the same minutes did exactly that for four days — see "And then it took the lock off the seal" — and the general form is worth holding on to: a change that looks like it only affects the messages can reach this risk through the schedule they share. **The same source has a second failure and it is the loud one, seen on 10 Sep 2026:** upstream can refuse the fetch outright, and a 503 out of `fetch_fixtures` used to kill the whole fire before it could learn whether there was a round in the file at all. Each `seal` fire now gets three attempts at the URL, ten seconds apart in total, and says so in the log when it uses them — see "The fetch upstream refused" above. That survives a blip and not an outage, so an afternoon of 503s across a window still costs the round exactly as a stale copy does. **The two are worth keeping apart when reading a log.** A stale file is a quiet exit 0 that nobody can distinguish from an empty week; a refused fetch is exit 1, a traceback, a cron mail and a Telegram message naming the status. The dangerous one is still the quiet one.
